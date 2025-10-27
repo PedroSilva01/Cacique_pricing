@@ -339,6 +339,7 @@ const CityModal = ({ data, onClose, onSave }) => {
 const GroupModal = ({ data, baseCities = [], postos = [], onClose, onSave }) => { 
     const [d, setD] = useState(data); 
     const onPostoToggle = (id, checked) => setD({ ...d, posto_ids: checked ? [...(d.posto_ids || []), id] : (d.posto_ids || []).filter(i => i !== id) });
+    const onBaseCityToggle = (id, checked) => setD({ ...d, base_city_ids: checked ? [...(d.base_city_ids || []), id] : (d.base_city_ids || []).filter(i => i !== id) });
 
     const bandeiras = [
         { value: 'bandeira_branca', label: 'Bandeira Branca / Independente' },
@@ -364,17 +365,8 @@ const GroupModal = ({ data, baseCities = [], postos = [], onClose, onSave }) => 
                 </Select>
             </div>
         </div>
-        <div>
-            <Label>Base de Carregamento</Label>
-            <Select value={d.base_city_id || ''} onValueChange={v => setD({ ...d, base_city_id: v })}>
-                <SelectTrigger><SelectValue placeholder="Selecione a base..." /></SelectTrigger>
-                <SelectContent>
-                    {baseCities.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground mt-1">Um posto pode estar em múltiplos grupos, desde que sejam de bases diferentes</p>
-        </div>
 
+        <MultiSelectCheckbox title="Bases de Carregamento" options={baseCities} selected={d.base_city_ids} onToggle={onBaseCityToggle} />
         <MultiSelectCheckbox title="Postos do Grupo" options={postos} selected={d.posto_ids} onToggle={onPostoToggle} />
     </ModalWrapper>; 
 };

@@ -33,37 +33,49 @@ const OilPriceChart = () => {
   const forceUpdateOilPrices = async () => {
     setUpdating(true);
     try {
-      console.log('Forçando atualização de preços do petróleo...');
-      const { data, error } = await supabase.functions.invoke('fetch-oil-prices');
-      if (error) throw error;
-      
-      if (data?.data && (data.data.WTI || data.data.BRENT)) {
-        // Data local (não UTC)
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, '0');
-        const day = String(now.getDate()).padStart(2, '0');
-        const today = `${year}-${month}-${day}`;
-        
-        const { error: upsertError } = await supabase.from('oil_prices').upsert({
-          date: today,
-          wti_price: data.data.WTI?.price || null,
-          brent_price: data.data.BRENT?.price || null,
-          wti_change: data.data.WTI?.change || '+0.00%',
-          brent_change: data.data.BRENT?.change || '+0.00%',
-          timestamp: new Date().toISOString()
-        }, {
-          onConflict: 'date'
-        });
-        
-        if (upsertError) throw upsertError;
-        
-        setLastUpdate(new Date().toLocaleTimeString());
-        await fetchOilPriceHistory();
-      }
+      const forceUpdate = async () => {
+        setLoading(true);
+        try {
+          const { data, error } = await supabase.functions.invoke('fetch-oil-prices');
+          if (error) throw error;
+          
+          if (data?.data && (data.data.WTI || data.data.BRENT)) {
+            // Data local (não UTC)
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            const today = `${year}-${month}-${day}`;
+            
+            const { error: upsertError } = await supabase.from('oil_prices').upsert({
+              date: today,
+              wti_price: data.data.WTI?.price || null,
+              brent_price: data.data.BRENT?.price || null,
+              wti_change: data.data.WTI?.change || '+0.00%',
+              brent_change: data.data.BRENT?.change || '+0.00%',
+              timestamp: new Date().toISOString()
+            }, {
+              onConflict: 'date'
+            });
+            
+            if (upsertError) throw upsertError;
+            
+            setLastUpdate(new Date().toLocaleTimeString());
+            await fetchOilPriceHistory();
+          } else {
+            setError('API não retornou dados');
+          }
+        } catch (err) {
+          console.error('Erro ao forçar atualização:', err);
+          setError('Erro ao atualizar preços: ' + err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+      await forceUpdate();
     } catch (err) {
       console.error('Erro ao forçar atualização:', err);
-      setError('Erro ao atualizar preços do petróleo');
+      setError('Erro ao atualizar preços: ' + err.message);
     } finally {
       setUpdating(false);
     }

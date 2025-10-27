@@ -2,7 +2,7 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Fuel, Zap, LogOut, BarChart2, LineChart, Calculator, DollarSign, SlidersHorizontal, Sun, Moon } from 'lucide-react';
+import { Fuel, Zap, LogOut, BarChart2, LineChart, DollarSign, SlidersHorizontal, Sun, Moon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -48,10 +48,6 @@ const Header = () => {
             <NavLink to="/price-entry" className={navLinkClass}>
               <DollarSign className="w-4 h-4" />
               Lançar Preços
-            </NavLink>
-            <NavLink to="/simulator" className={navLinkClass}>
-              <Calculator className="w-4 h-4" />
-              Simulador
             </NavLink>
             <NavLink to="/analysis" className={navLinkClass}>
               <LineChart className="w-4 h-4" />

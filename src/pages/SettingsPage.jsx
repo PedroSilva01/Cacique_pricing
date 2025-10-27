@@ -290,7 +290,7 @@ const SettingsPage = () => {
       <AnimatePresence>
         {modal.type === 'city' && <CityModal data={modal.data} onClose={() => setModal({ type: null })} onSave={(d) => handleSave('cities', d)} />}
         {modal.type === 'group' && <GroupModal data={modal.data} baseCities={baseCities} postos={postos} onClose={() => setModal({ type: null })} onSave={(d) => handleSave('groups', d)} />}
-        {modal.type === 'supplier' && <SupplierModal data={modal.data} cities={cities} settings={settings} onClose={() => setModal({ type: null })} onSave={(d) => handleSave('suppliers', d)} />}
+        {modal.type === 'supplier' && <SupplierModal data={modal.data} baseCities={baseCities} settings={settings} onClose={() => setModal({ type: null })} onSave={(d) => handleSave('suppliers', d)} />}
         {modal.type === 'posto' && <PostoModal data={modal.data} baseCities={baseCities} cities={cities} groups={groups} onClose={() => setModal({ type: null })} onSave={(d) => handleSave('postos', d)} />}
         {modal.type === 'route' && <RouteModal data={modal.data} baseCities={baseCities} cities={cities} settings={settings} onClose={() => setModal({ type: null })} onSave={(d) => handleSave('freight_routes', d)} />}
       </AnimatePresence>
@@ -340,10 +340,30 @@ const GroupModal = ({ data, baseCities = [], postos = [], onClose, onSave }) => 
     const [d, setD] = useState(data); 
     const onPostoToggle = (id, checked) => setD({ ...d, posto_ids: checked ? [...(d.posto_ids || []), id] : (d.posto_ids || []).filter(i => i !== id) });
 
+    const bandeiras = [
+        { value: 'bandeira_branca', label: 'Bandeira Branca / Independente' },
+        { value: 'ipiranga', label: 'Ipiranga' },
+        { value: 'shell', label: 'Shell' },
+        { value: 'vibra', label: 'Vibra' },
+        { value: 'federal', label: 'Federal' }
+    ];
+
     return <ModalWrapper title={d.id ? "Editar Grupo" : "Novo Grupo"} data={d} onClose={onClose} onSave={onSave} wide>
-        <Label>Nome do Grupo</Label>
-        <Input placeholder="Ex: Ipiranga Rodovia" value={d.name || ''} onChange={e => setD({ ...d, name: e.target.value })} />
-        
+        <div className="grid grid-cols-2 gap-4">
+            <div>
+                <Label>Nome do Grupo</Label>
+                <Input placeholder="Ex: Ipiranga Rodovia" value={d.name || ''} onChange={e => setD({ ...d, name: e.target.value })} />
+            </div>
+            <div>
+                <Label>Bandeira do Grupo</Label>
+                <Select value={d.bandeira || 'bandeira_branca'} onValueChange={v => setD({ ...d, bandeira: v })}>
+                    <SelectTrigger><SelectValue placeholder="Selecione a bandeira..." /></SelectTrigger>
+                    <SelectContent>
+                        {bandeiras.map(b => <SelectItem key={b.value} value={b.value}>{b.label}</SelectItem>)}
+                    </SelectContent>
+                </Select>
+            </div>
+        </div>
         <div>
             <Label>Base de Carregamento</Label>
             <Select value={d.base_city_id || ''} onValueChange={v => setD({ ...d, base_city_id: v })}>
@@ -373,16 +393,37 @@ const MultiSelectCheckbox = ({ title, options, selected, onToggle }) => (
     </div>
 );
 
-const SupplierModal = ({ data, cities, settings, onClose, onSave }) => { 
+const SupplierModal = ({ data, baseCities, settings, onClose, onSave }) => { 
     const [d, setD] = useState(data); 
     const onCityToggle = (id, checked) => setD({ ...d, city_ids: checked ? [...(d.city_ids || []), id] : (d.city_ids || []).filter(i => i !== id) });
     const onProductToggle = (key, checked) => setD({ ...d, available_products: checked ? [...(d.available_products || []), key] : (d.available_products || []).filter(i => i !== key) });
     const fuelOptions = Object.entries(settings.fuelTypes || {}).map(([key, value]) => ({ id: key, name: value.name }));
 
+    const bandeiras = [
+        { value: 'bandeira_branca', label: 'Bandeira Branca / Independente' },
+        { value: 'ipiranga', label: 'Ipiranga' },
+        { value: 'shell', label: 'Shell' },
+        { value: 'vibra', label: 'Vibra' },
+        { value: 'federal', label: 'Federal' }
+    ];
+
     return <ModalWrapper title={d.id ? "Editar Fornecedor" : "Novo Fornecedor"} data={d} onClose={onClose} onSave={onSave} wide>
-        <Label>Nome do Fornecedor</Label>
-        <Input placeholder="Ex: Ipiranga" value={d.name || ''} onChange={e => setD({ ...d, name: e.target.value })} />
-        <MultiSelectCheckbox title="Cidades (Bases) de Operação" options={cities} selected={d.city_ids} onToggle={onCityToggle} />
+        <div className="grid grid-cols-2 gap-4">
+            <div>
+                <Label>Nome do Fornecedor</Label>
+                <Input placeholder="Ex: Ipiranga" value={d.name || ''} onChange={e => setD({ ...d, name: e.target.value })} />
+            </div>
+            <div>
+                <Label>Bandeira do Fornecedor</Label>
+                <Select value={d.bandeira || 'bandeira_branca'} onValueChange={v => setD({ ...d, bandeira: v })}>
+                    <SelectTrigger><SelectValue placeholder="Selecione a bandeira..." /></SelectTrigger>
+                    <SelectContent>
+                        {bandeiras.map(b => <SelectItem key={b.value} value={b.value}>{b.label}</SelectItem>)}
+                    </SelectContent>
+                </Select>
+            </div>
+        </div>
+        <MultiSelectCheckbox title="Cidades Base de Operação" options={baseCities} selected={d.city_ids} onToggle={onCityToggle} />
         <MultiSelectCheckbox title="Produtos Disponíveis" options={fuelOptions} selected={d.available_products} onToggle={onProductToggle} />
     </ModalWrapper>; 
 };
@@ -392,10 +433,28 @@ const PostoModal = ({ data, baseCities = [], cities, groups, onClose, onSave }) 
     const onSupplyCityToggle = (id, checked) => setD({ ...d, allowed_supply_cities: checked ? [...(d.allowed_supply_cities || []), id] : (d.allowed_supply_cities || []).filter(i => i !== id) });
     const onGroupToggle = (id, checked) => setD({ ...d, group_ids: checked ? [...(d.group_ids || []), id] : (d.group_ids || []).filter(i => i !== id) });
 
+    const bandeiras = [
+        { value: 'bandeira_branca', label: 'Bandeira Branca' },
+        { value: 'ipiranga', label: 'Ipiranga' },
+        { value: 'shell', label: 'Shell' },
+        { value: 'vibra', label: 'Vibra' }
+    ];
+
     return <ModalWrapper title={d.id ? "Editar Posto" : "Novo Posto"} data={d} onClose={onClose} onSave={onSave} wide>
         <div className="grid grid-cols-2 gap-4">
             <div><Label>Nome do Posto</Label><Input placeholder="Ex: Posto Cacique 10" value={d.name || ''} onChange={e => setD({ ...d, name: e.target.value })} /></div>
             <div><Label>Cidade de Localização</Label><Select value={d.city_id || ''} onValueChange={v => setD({ ...d, city_id: v })}><SelectTrigger><SelectValue placeholder="Selecione..." /></SelectTrigger><SelectContent>{cities.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent></Select></div>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+            <div>
+                <Label>Bandeira do Posto</Label>
+                <Select value={d.bandeira || 'bandeira_branca'} onValueChange={v => setD({ ...d, bandeira: v })}>
+                    <SelectTrigger><SelectValue placeholder="Selecione a bandeira..." /></SelectTrigger>
+                    <SelectContent>
+                        {bandeiras.map(b => <SelectItem key={b.value} value={b.value}>{b.label}</SelectItem>)}
+                    </SelectContent>
+                </Select>
+            </div>
         </div>
         <MultiSelectCheckbox title="Grupos do Posto" options={groups} selected={d.group_ids} onToggle={onGroupToggle} />
         <MultiSelectCheckbox title="Bases de Abastecimento Permitidas" options={baseCities} selected={d.allowed_supply_cities} onToggle={onSupplyCityToggle} />

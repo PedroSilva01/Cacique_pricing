@@ -18,7 +18,17 @@ const ManualPriceModal = ({ isOpen, onClose, suppliers, onSave, settings, postos
   const [selectedGroups, setSelectedGroups] = useState([]); // Array de IDs
   const [applyToAll, setApplyToAll] = useState(true); // Aplicar a todos por padrão
   const [prices, setPrices] = useState({});
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  
+  // Data local (não UTC)
+  const getLocalDate = () => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+  
+  const [date, setDate] = useState(getLocalDate());
   const { user } = useAuth();
   
   const currentSupplier = suppliers.find(s => s.id === selectedSupplier);

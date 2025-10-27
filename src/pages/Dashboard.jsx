@@ -153,14 +153,22 @@ const Dashboard = () => {
                 
                 setOilPrice(oilData);
                 
-                // PASSO 2: Verificar se precisa atualizar (última atualização > 1 hora)
-                const lastUpdate = new Date(dbPrices.timestamp || dbPrices.date);
-                const hoursSinceUpdate = (Date.now() - lastUpdate.getTime()) / (1000 * 60 * 60);
+                // PASSO 2: Verificar se precisa atualizar
+                const now = new Date();
+                const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+                const isToday = dbPrices.date === todayStr;
                 
-                // Se passou mais de 1 hora, buscar novos dados em background
-                if (hoursSinceUpdate >= 1 || !dbPrices.brent_price) {
-                    console.log('Atualizando preços de petróleo (última atualização há', hoursSinceUpdate.toFixed(1), 'horas)');
+                // Se não é de hoje OU passou mais de 1 hora, buscar novos dados
+                if (!isToday) {
+                    console.log('Dados de petróleo desatualizados (data:', dbPrices.date, '!= hoje:', todayStr, '), atualizando...');
                     updateOilPricesInBackground();
+                } else {
+                    const lastUpdate = new Date(dbPrices.timestamp || dbPrices.date);
+                    const hoursSinceUpdate = (Date.now() - lastUpdate.getTime()) / (1000 * 60 * 60);
+                    if (hoursSinceUpdate >= 1 || !dbPrices.brent_price) {
+                        console.log('Atualizando preços de petróleo (última atualização há', hoursSinceUpdate.toFixed(1), 'horas)');
+                        updateOilPricesInBackground();
+                    }
                 }
             } else {
                 // Se não tem dados no banco, buscar da API pela primeira vez
@@ -256,9 +264,18 @@ const Dashboard = () => {
     const comparisonData = useMemo(() => {
         if (!selectedFuel || !selectedDestination || !suppliers.length) return [];
         const destinationCityId = selectedDestination.city_id;
+        const postoBandeira = selectedDestination.bandeira || 'bandeira_branca';
 
         return suppliers
             .filter(s => s.available_products?.includes(selectedFuel))
+            // FILTRO DE BANDEIRA: Postos bandeirados só podem comprar da própria bandeira
+            .filter(s => {
+                const supplierBandeira = s.bandeira || 'bandeira_branca';
+                // Bandeira branca pode comprar de qualquer um
+                if (postoBandeira === 'bandeira_branca') return true;
+                // Postos bandeirados só podem comprar da própria bandeira
+                return supplierBandeira === postoBandeira || supplierBandeira === 'bandeira_branca';
+            })
             .map(supplier => {
                 // Filtrar preços pela base selecionada (se houver)
                 let priceData;
@@ -386,7 +403,7 @@ Melhor Custo: ${comparisonData[0].name} @ ${comparisonData[0].finalPrice.toLocal
             comparisonData,
             defaultDestination: selectedDestination.name
         });
-    }
+    };
 
     if (loading) return <div className="flex justify-center items-center h-full"><RefreshCw className="w-12 h-12 text-primary animate-spin" /></div>;
     if (error) return <div className="flex flex-col justify-center items-center h-full text-destructive"><AlertTriangle className="w-12 h-12 mb-4" /><p>{error}</p></div>;
@@ -543,18 +560,6 @@ Melhor Custo: ${comparisonData[0].name} @ ${comparisonData[0].finalPrice.toLocal
                 />
             </motion.div>
 
-            {/* Matriz Completa de Preços - Colapsável */}
-            <ComprehensivePriceMatrix
-                selectedGroup={selectedGroup}
-                groups={groups}
-                postos={postos}
-                baseCities={baseCities}
-                dailyPrices={dailyPrices}
-                suppliers={suppliers}
-                freightRoutes={freightRoutes}
-                settings={settings}
-            />
-
             {/* Ações Rápidas - Movido para baixo */}
             <motion.div 
                 initial={{ opacity: 0, y: 20 }} 
@@ -565,7 +570,7 @@ Melhor Custo: ${comparisonData[0].name} @ ${comparisonData[0].finalPrice.toLocal
                     <Sparkles className="w-6 h-6 text-primary" />
                     <h3 className="text-xl font-bold text-foreground">Ações Rápidas</h3>
                 </div>
-                <div className="grid md:grid-cols-4 gap-3">
+                <div className="grid md:grid-cols-3 gap-3">
                    <Button onClick={() => setIsReportModalOpen(true)} disabled={comparisonData.length === 0}>
                        <FileUp className="w-4 h-4 mr-2" />Relatório Detalhado
                    </Button>
@@ -574,9 +579,6 @@ Melhor Custo: ${comparisonData[0].name} @ ${comparisonData[0].finalPrice.toLocal
                    </Button>
                    <Button variant="outline" onClick={handleGeneratePdf} disabled={comparisonData.length === 0}>
                        <Download className="w-4 h-4 mr-2" />Baixar PDF
-                   </Button>
-                   <Button variant="outline" onClick={() => setIsManualModalOpen(true)}>
-                       <Droplet className="w-4 h-4 mr-2" />Lançar Preços
                    </Button>
                 </div>
             </motion.div>
@@ -589,6 +591,18 @@ Melhor Custo: ${comparisonData[0].name} @ ${comparisonData[0].finalPrice.toLocal
                 selectedFuel={selectedFuel}
                 fuelTypes={settings.fuelTypes}
                 selectedBase={selectedBase}
+            />
+
+            {/* Matriz Completa de Preços - Colapsável */}
+            <ComprehensivePriceMatrix
+                selectedGroup={selectedGroup}
+                groups={groups}
+                postos={postos}
+                baseCities={baseCities}
+                dailyPrices={dailyPrices}
+                suppliers={suppliers}
+                freightRoutes={freightRoutes}
+                settings={settings}
             />
             
             <AverageFuelPricesChart />

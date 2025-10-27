@@ -228,6 +228,10 @@ const AverageFuelPricesChart = () => {
               <YAxis
                 className="text-xs"
                 tick={{ fill: 'hsl(var(--muted-foreground))' }}
+                domain={[
+                  (dataMin) => Math.floor(dataMin * 0.95),
+                  (dataMax) => Math.ceil(dataMax * 1.05)
+                ]}
                 tickFormatter={(value) => `R$ ${value.toFixed(2)}`}
               />
               <Tooltip content={<CustomTooltip />} />
@@ -256,6 +260,10 @@ const AverageFuelPricesChart = () => {
               <YAxis
                 className="text-xs"
                 tick={{ fill: 'hsl(var(--muted-foreground))' }}
+                domain={[
+                  (dataMin) => Math.floor(dataMin * 0.95),
+                  (dataMax) => Math.ceil(dataMax * 1.05)
+                ]}
                 tickFormatter={(value) => `R$ ${value.toFixed(2)}`}
               />
               <Tooltip content={<CustomTooltip />} />

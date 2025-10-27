@@ -33,6 +33,8 @@ const BestCostAnalysis = ({
     // Para cada base, calcular os custos médios
     const baseAnalysis = baseCities.map(base => {
       const costsPerPosto = groupPostos.map(posto => {
+        const postoBandeira = posto.bandeira || 'bandeira_branca';
+        
         // Preços da base para fornecedores que têm esse combustível
         const basePrices = dailyPrices.filter(dp => 
           dp.base_city_id === base.id &&
@@ -45,6 +47,18 @@ const BestCostAnalysis = ({
         // Calcular custo por fornecedor (preço + frete)
         const supplierCosts = basePrices.map(priceRecord => {
           const supplier = suppliers.find(s => s.id === priceRecord.supplier_id);
+          
+          // FILTRO DE BANDEIRA: Verificar compatibilidade
+          if (supplier) {
+            const supplierBandeira = supplier.bandeira || 'bandeira_branca';
+            // Se posto é bandeirado, só aceita fornecedor da mesma bandeira ou bandeira branca
+            if (postoBandeira !== 'bandeira_branca') {
+              if (supplierBandeira !== postoBandeira && supplierBandeira !== 'bandeira_branca') {
+                return null; // Fornecedor incompatível
+              }
+            }
+          }
+          
           const basePrice = priceRecord.prices[selectedFuel];
 
           // Buscar frete da base até o posto (frete é por veículo, não por combustível)
@@ -68,7 +82,7 @@ const BestCostAnalysis = ({
             finalCost,
             posto: posto.name
           };
-        });
+        }).filter(Boolean); // Remover fornecedores incompatíveis
 
         return {
           posto: posto.name,

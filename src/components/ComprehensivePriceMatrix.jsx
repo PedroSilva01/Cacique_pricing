@@ -55,8 +55,21 @@ const ComprehensivePriceMatrix = ({
 
         // Calcular custo médio para os postos selecionados
         const costs = postosToAnalyze.map(posto => {
+          const postoBandeira = posto.bandeira || 'bandeira_branca';
+          
           const supplierCosts = pricesForFuel.map(priceRecord => {
             const supplier = suppliers.find(s => s.id === priceRecord.supplier_id);
+            
+            // FILTRO DE BANDEIRA: Verificar compatibilidade
+            if (supplier) {
+              const supplierBandeira = supplier.bandeira || 'bandeira_branca';
+              if (postoBandeira !== 'bandeira_branca') {
+                if (supplierBandeira !== postoBandeira && supplierBandeira !== 'bandeira_branca') {
+                  return null; // Fornecedor incompatível
+                }
+              }
+            }
+            
             const basePrice = priceRecord.prices[fuelKey];
 
             // Buscar frete (frete é por veículo, não por combustível)
@@ -81,7 +94,7 @@ const ComprehensivePriceMatrix = ({
               finalCost,
               posto: posto.name
             };
-          });
+          }).filter(Boolean); // Remover fornecedores incompatíveis
 
           // Pegar o melhor custo deste posto
           if (supplierCosts.length === 0) return null;

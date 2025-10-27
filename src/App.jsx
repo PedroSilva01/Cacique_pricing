@@ -7,7 +7,6 @@ import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { RefreshCw } from 'lucide-react';
 import Dashboard from '@/pages/Dashboard';
 import Analysis from '@/pages/Analysis';
-import Simulator from '@/pages/Simulator';
 import PriceEntry from '@/pages/PriceEntry';
 import SettingsPage from '@/pages/SettingsPage';
 
@@ -35,7 +34,6 @@ function App() {
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="price-entry" element={<PriceEntry />} />
           <Route path="analysis" element={<Analysis />} />
-          <Route path="simulator" element={<Simulator />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/dashboard" />} />
         </Route>

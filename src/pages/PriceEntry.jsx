@@ -11,6 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Checkbox } from '@/components/ui/checkbox';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
+import BrandBadge from '@/components/ui/BrandBadge';
 import { defaultSettings } from '@/lib/mockData';
 
 const PriceEntry = () => {
@@ -180,7 +182,7 @@ const PriceEntry = () => {
   const handleClear = () => {
     setPrices({});
     setSelectedGroups([]);
-    setDate(new Date().toISOString().split('T')[0]);
+    setDate(getLocalDateString());
   };
 
   if (loading) {
@@ -299,9 +301,10 @@ const PriceEntry = () => {
                           onCheckedChange={() => handleGroupToggle(group.id)}
                         />
                         <label htmlFor={`group-${group.id}`} className="flex-1 cursor-pointer">
-                          <div className="flex items-center gap-2 mb-1">
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
                             <Building className="w-4 h-4 text-primary" />
                             <span className="font-semibold">{group.name}</span>
+                            <BrandBadge bandeira={group.bandeira} size="xs" />
                             <Badge variant="secondary">{groupPostos.length} posto(s)</Badge>
                           </div>
                           <p className="text-sm text-muted-foreground">
@@ -367,7 +370,7 @@ const PriceEntry = () => {
             <CardContent className="space-y-4">
               <div>
                 <Label className="text-xs text-muted-foreground">Data</Label>
-                <p className="font-semibold">{new Date(date).toLocaleDateString('pt-BR')}</p>
+                <p className="font-semibold">{date ? new Date(date + 'T00:00:00').toLocaleDateString('pt-BR') : '-'}</p>
               </div>
 
               <div>

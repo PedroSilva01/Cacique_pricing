@@ -34,6 +34,7 @@ const CustomTooltip = ({ active, payload, label, currency = 'BRL' }) => {
 const Analysis = () => {
   const [dbData, setDbData] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
+  const [baseCities, setBaseCities] = useState([]);
   const [settings, setSettings] = useState(defaultSettings);
   const [oilPrices, setOilPrices] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -42,6 +43,7 @@ const Analysis = () => {
   const fuelTypes = useMemo(() => settings.fuelTypes || {}, [settings]);
   const [selectedFuels, setSelectedFuels] = useState([]);
   const [selectedSuppliers, setSelectedSuppliers] = useState([]);
+  const [selectedBase, setSelectedBase] = useState('all');
   const [fuelPeriod, setFuelPeriod] = useState('weekly'); // 'weekly' or 'monthly'
   const [oilPeriod, setOilPeriod] = useState('monthly'); // 'weekly' or 'monthly'
   const [showFilters, setShowFilters] = useState(true);
@@ -58,15 +60,17 @@ const Analysis = () => {
     const fromDate = startDate.toISOString().split('T')[0];
 
     try {
-      const [pricesRes, suppliersRes, settingsRes, oilRes] = await Promise.all([
-        supabase.from('daily_prices').select('date, supplier_id, prices').eq('user_id', user.id).gte('date', fromDate),
+      const [pricesRes, suppliersRes, baseCitiesRes, settingsRes, oilRes] = await Promise.all([
+        supabase.from('daily_prices').select('date, supplier_id, base_city_id, prices').eq('user_id', user.id).gte('date', fromDate),
         supabase.from('suppliers').select('id, name').eq('user_id', user.id),
+        supabase.from('base_cities').select('id, name').eq('user_id', user.id).eq('is_base', true),
         supabase.from('user_settings').select('settings').eq('user_id', user.id).maybeSingle(),
         supabase.from('oil_prices').select('date, wti_price, brent_price').gte('date', fromDate),
       ]);
 
       if (pricesRes.error) throw pricesRes.error;
       if (suppliersRes.error) throw suppliersRes.error;
+      if (baseCitiesRes.error) throw baseCitiesRes.error;
       if (settingsRes.error && settingsRes.error.code !== 'PGRST116') throw settingsRes.error;
       if (oilRes.error) throw oilRes.error;
       
@@ -84,18 +88,25 @@ const Analysis = () => {
       }
 
       setSuppliers(suppliersRes.data || []);
+      setBaseCities(baseCitiesRes.data || []);
       setSettings(userSettings);
       setOilPrices(oilRes.data || []);
 
       // Flatten all prices for selected fuels and suppliers
       const relevantPrices = [];
       pricesRes.data.forEach(priceRecord => {
+        // Filtrar por base se não for "all"
+        if (selectedBase !== 'all' && priceRecord.base_city_id !== selectedBase) {
+          return;
+        }
+        
         if (priceRecord.prices) {
           Object.keys(priceRecord.prices).forEach(fuelKey => {
             if (priceRecord.prices[fuelKey]) {
               relevantPrices.push({
                 date: priceRecord.date,
                 supplier_id: priceRecord.supplier_id,
+                base_city_id: priceRecord.base_city_id,
                 fuel_type: fuelKey,
                 price: priceRecord.prices[fuelKey]
               });
@@ -111,7 +122,7 @@ const Analysis = () => {
     } finally {
       setLoading(false);
     }
-  }, [user, selectedFuels, selectedSuppliers, fuelPeriod]);
+  }, [user, selectedFuels, selectedSuppliers, selectedBase, fuelPeriod]);
 
   useEffect(() => {
     if (user) {
@@ -181,24 +192,33 @@ const Analysis = () => {
   const oilLineNames = getLineNames(oilPriceChartData);
 
   const renderChart = (title, icon, data, lineNames, tooltipCurrency, noDataMessage) => (
-    <div className="glass-effect rounded-xl p-6 shadow-sm h-[60vh] flex flex-col">
+    <div className="glass-effect rounded-xl p-6 shadow-sm flex flex-col border overflow-hidden">
       <div className="flex items-center gap-3 mb-4">
         {icon}
         <h2 className="text-xl font-bold text-foreground">{title}</h2>
       </div>
-      <div className="flex-grow">
+      <div className="h-[450px] w-full">
         {loading && <div className="flex justify-center items-center h-full"><RefreshCw className="w-12 h-12 text-primary animate-spin" /></div>}
         {!loading && error && <div className="flex flex-col justify-center items-center h-full text-destructive"><AlertTriangle className="w-12 h-12 mb-4" /><p className="font-semibold">{error}</p></div>}
         {!loading && !error && data.length > 0 && (
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={data} margin={{ top: 5, right: 30, left: 30, bottom: 5 }}>
+            <LineChart data={data} margin={{ top: 5, right: 30, left: 30, bottom: 20 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border) / 0.5)" />
-              <XAxis dataKey="date" tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }} />
+              <XAxis dataKey="date" tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 11 }} />
               <YAxis tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }} tickFormatter={(value) => `${tooltipCurrency === 'BRL' ? 'R$' : '$'}${Number(value).toFixed(2)}`} domain={['dataMin - 0.05', 'dataMax + 0.05']} />
               <Tooltip content={<CustomTooltip currency={tooltipCurrency} />} />
-              <Legend wrapperStyle={{ color: 'hsl(var(--muted-foreground))' }} />
+              <Legend 
+                wrapperStyle={{ 
+                  paddingTop: '10px',
+                  color: 'hsl(var(--muted-foreground))',
+                  fontSize: '12px'
+                }}
+                iconType="line"
+                layout="horizontal"
+                verticalAlign="bottom"
+              />
               {lineNames.map((name, index) => (
-                <Line key={name} type="monotone" dataKey={name} stroke={COLORS[index % COLORS.length]} strokeWidth={2.5} dot={{ r: 4 }} activeDot={{ r: 8 }} />
+                <Line key={name} type="monotone" dataKey={name} stroke={COLORS[index % COLORS.length]} strokeWidth={2.5} dot={{ r: 3 }} activeDot={{ r: 6 }} />
               ))}
             </LineChart>
           </ResponsiveContainer>
@@ -237,7 +257,26 @@ const Analysis = () => {
           Filtros de Análise
         </h3>
         
-        <div className="grid md:grid-cols-2 gap-6">
+        <div className="grid md:grid-cols-3 gap-6">
+          {/* Filtro de Base */}
+          <div>
+            <Label className="text-sm font-medium mb-3 block">Base de Carregamento</Label>
+            <Select value={selectedBase} onValueChange={setSelectedBase}>
+              <SelectTrigger>
+                <SelectValue placeholder="Selecione a base..." />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todas as Bases</SelectItem>
+                {baseCities.map((base) => (
+                  <SelectItem key={base.id} value={base.id}>{base.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground mt-1">
+              Filtra os preços por cidade base de origem
+            </p>
+          </div>
+
           {/* Filtro de Fornecedores */}
           <div>
             <Label className="text-sm font-medium mb-3 block">Fornecedores</Label>
@@ -348,7 +387,7 @@ const Analysis = () => {
       <div className="grid lg:grid-cols-2 gap-6">
         <div>
           {renderChart(
-              'Preços de Combustível por Fornecedor',
+              `Preços de Combustível por Fornecedor${selectedBase !== 'all' ? ` - ${baseCities.find(b => b.id === selectedBase)?.name || ''}` : ' - Todas as Bases'}`,
               <Fuel className="w-6 h-6 text-primary" />,
               fuelPriceChartData,
               fuelLineNames,

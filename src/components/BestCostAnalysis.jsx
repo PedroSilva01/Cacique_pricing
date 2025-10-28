@@ -1,7 +1,9 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { TrendingDown, TrendingUp, MapPin, Building2, DollarSign, Fuel, Award } from 'lucide-react';
+import { TrendingDown, TrendingUp, MapPin, Building2, DollarSign, Fuel, Award, Filter } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Label } from '@/components/ui/label';
 
 const BestCostAnalysis = ({ 
   selectedGroup, 
@@ -14,6 +16,8 @@ const BestCostAnalysis = ({
   freightRoutes = [],
   settings = {}
 }) => {
+  // Estado para controlar quantos fornecedores mostrar por base
+  const [suppliersPerBase, setSuppliersPerBase] = useState('1');
   
   const analysis = useMemo(() => {
     if (!selectedGroup || selectedGroup === 'Todos' || !selectedFuel) {
@@ -100,6 +104,19 @@ const BestCostAnalysis = ({
       const bestCost = Math.min(...allCosts.map(c => c.finalCost));
       const avgCost = allCosts.reduce((sum, c) => sum + c.finalCost, 0) / allCosts.length;
       const bestSupplier = allCosts.find(c => c.finalCost === bestCost);
+      
+      // Agrupar por fornecedor e pegar o melhor custo de cada
+      const costsBySupplier = allCosts.reduce((acc, cost) => {
+        if (!acc[cost.supplier] || cost.finalCost < acc[cost.supplier].finalCost) {
+          acc[cost.supplier] = cost;
+        }
+        return acc;
+      }, {});
+      
+      // Top N fornecedores ordenados por custo
+      const topSuppliers = Object.values(costsBySupplier)
+        .sort((a, b) => a.finalCost - b.finalCost)
+        .slice(0, parseInt(suppliersPerBase) || 1);
 
       return {
         base: base.name,
@@ -110,6 +127,7 @@ const BestCostAnalysis = ({
         bestPosto: bestSupplier?.posto,
         postos: costsPerPosto.length,
         suppliers: [...new Set(allCosts.map(c => c.supplier))].length,
+        topSuppliers, // Lista dos top N fornecedores
         details: costsPerPosto
       };
     }).filter(Boolean);
@@ -133,7 +151,7 @@ const BestCostAnalysis = ({
       savingsPercent,
       fuelName: settings.fuelTypes?.[selectedFuel]?.name || selectedFuel
     };
-  }, [selectedGroup, selectedFuel, baseCities, groups, postos, dailyPrices, suppliers, freightRoutes, settings]);
+  }, [selectedGroup, selectedFuel, baseCities, groups, postos, dailyPrices, suppliers, freightRoutes, settings, suppliersPerBase]);
 
   if (!analysis) {
     return (
@@ -146,6 +164,27 @@ const BestCostAnalysis = ({
 
   return (
     <div className="space-y-6">
+      {/* Filtro de Fornecedores */}
+      <div className="flex items-center gap-3 mb-4 p-4 bg-muted/30 rounded-lg border">
+        <Filter className="w-5 h-5 text-primary" />
+        <Label className="font-semibold">Fornecedores por Base:</Label>
+        <Select value={suppliersPerBase} onValueChange={setSuppliersPerBase}>
+          <SelectTrigger className="w-[200px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="1">Melhor de cada base</SelectItem>
+            <SelectItem value="2">Top 2 por base</SelectItem>
+            <SelectItem value="3">Top 3 por base</SelectItem>
+            <SelectItem value="5">Top 5 por base</SelectItem>
+            <SelectItem value="999">Todos disponíveis</SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-sm text-muted-foreground ml-2">
+          Útil quando o melhor fornecedor não tem produto disponível
+        </p>
+      </div>
+
       {/* Header com resumo */}
       <div className="grid md:grid-cols-4 gap-4">
         <motion.div 
@@ -322,32 +361,30 @@ const BestCostAnalysis = ({
             </div>
 
             <div className="space-y-3">
-              {base.details.slice(0, 3).map((detail, i) => (
-                <div key={i} className="text-sm">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-muted-foreground">{detail.posto}</span>
-                    <span className="text-xs text-muted-foreground">{detail.city}</span>
-                  </div>
-                  {detail.costs.slice(0, 1).map((cost, j) => (
-                    <div key={j} className="flex items-center justify-between pl-4 text-xs">
-                      <span className="text-muted-foreground">{cost.supplier}</span>
-                      <div className="flex items-center gap-2">
-                        <span className="text-muted-foreground">
-                          R$ {cost.basePrice.toFixed(4)} + R$ {cost.freight.toFixed(4)}
-                        </span>
-                        <span className="font-semibold text-green-600">
-                          = R$ {cost.finalCost.toFixed(4)}
-                        </span>
-                      </div>
+              {/* Mostrar top N fornecedores desta base */}
+              <div className="font-semibold text-sm mb-2 text-primary">
+                Top {base.topSuppliers.length} Fornecedor(es):
+              </div>
+              {base.topSuppliers.map((supplier, i) => (
+                <div key={i} className="bg-muted/30 rounded p-3 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      {i === 0 && <Award className="w-4 h-4 text-green-600" />}
+                      <span className="font-semibold">{i + 1}º {supplier.supplier}</span>
                     </div>
-                  ))}
+                    <Badge variant={i === 0 ? "default" : "secondary"} className={i === 0 ? "bg-green-600" : ""}>
+                      {i === 0 ? "Melhor" : `+R$ ${(supplier.finalCost - base.topSuppliers[0].finalCost).toFixed(4)}`}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center justify-between text-xs text-muted-foreground pl-6">
+                    <span>Preço: R$ {supplier.basePrice.toFixed(4)}</span>
+                    <span>Frete: R$ {supplier.freight.toFixed(4)}</span>
+                    <span className="font-semibold text-green-600">
+                      Total: R$ {supplier.finalCost.toFixed(4)}
+                    </span>
+                  </div>
                 </div>
               ))}
-              {base.details.length > 3 && (
-                <p className="text-xs text-muted-foreground text-center pt-2">
-                  +{base.details.length - 3} posto(s) adicional(is)
-                </p>
-              )}
             </div>
           </motion.div>
         ))}

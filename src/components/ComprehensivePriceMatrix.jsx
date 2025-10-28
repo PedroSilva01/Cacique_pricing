@@ -64,7 +64,7 @@ const ComprehensivePriceMatrix = ({
             if (supplier) {
               const supplierBandeira = supplier.bandeira || 'bandeira_branca';
               if (postoBandeira !== 'bandeira_branca') {
-                if (supplierBandeira !== postoBandeira && supplierBandeira !== 'bandeira_branca') {
+                if (supplierBandeira !== postoBandeira) {
                   return null; // Fornecedor incompatível
                 }
               }

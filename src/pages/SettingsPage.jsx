@@ -113,8 +113,52 @@ const SettingsPage = () => {
       const record = { ...dataToSave, user_id: user.id };
       if (id) record.id = id;
       
-      const { error } = await supabase.from(tableName).upsert(record).select().single();
+      const { error, data: savedRecord } = await supabase.from(tableName).upsert(record).select().single();
       if (error) throw error;
+      
+      // SINCRONIZAÇÃO DE BANDEIRAS
+      // Se salvou um GRUPO, sincronizar bandeira para todos os postos do grupo
+      if (tableName === 'groups' && savedRecord) {
+        const groupBandeira = savedRecord.bandeira || 'bandeira_branca';
+        const postoIds = savedRecord.posto_ids || [];
+        
+        if (postoIds.length > 0 && groupBandeira !== 'bandeira_branca') {
+          // Atualizar bandeira de todos os postos do grupo
+          const { error: updateError } = await supabase
+            .from('postos')
+            .update({ bandeira: groupBandeira })
+            .in('id', postoIds)
+            .eq('user_id', user.id);
+          
+          if (updateError) console.error('Erro ao sincronizar bandeiras dos postos:', updateError);
+        }
+      }
+      
+      // Se salvou um POSTO, sincronizar bandeira do primeiro grupo (se houver)
+      if (tableName === 'postos' && savedRecord) {
+        const groupIds = savedRecord.group_ids || [];
+        
+        if (groupIds.length > 0) {
+          // Buscar o primeiro grupo para pegar sua bandeira
+          const { data: firstGroup, error: groupError } = await supabase
+            .from('groups')
+            .select('bandeira')
+            .eq('id', groupIds[0])
+            .eq('user_id', user.id)
+            .single();
+          
+          if (!groupError && firstGroup && firstGroup.bandeira && firstGroup.bandeira !== 'bandeira_branca') {
+            // Atualizar bandeira do posto com a bandeira do grupo
+            const { error: updateError } = await supabase
+              .from('postos')
+              .update({ bandeira: firstGroup.bandeira })
+              .eq('id', savedRecord.id)
+              .eq('user_id', user.id);
+            
+            if (updateError) console.error('Erro ao sincronizar bandeira do posto:', updateError);
+          }
+        }
+      }
       
       await fetchData();
       toast({ title: 'Sucesso!', description: 'Item salvo com sucesso.' });

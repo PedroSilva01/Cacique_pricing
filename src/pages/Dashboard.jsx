@@ -263,18 +263,32 @@ const Dashboard = () => {
 
     const comparisonData = useMemo(() => {
         if (!selectedFuel || !selectedDestination || !suppliers.length) return [];
+        
         const destinationCityId = selectedDestination.city_id;
+        
         const postoBandeira = selectedDestination.bandeira || 'bandeira_branca';
+        
+        // Pegar bases do grupo selecionado
+        const groupBaseCityIds = selectedGroup && selectedGroup !== 'Todos' 
+            ? (groups.find(g => g.id === selectedGroup)?.base_city_ids || [])
+            : null;
 
         return suppliers
             .filter(s => s.available_products?.includes(selectedFuel))
             // FILTRO DE BANDEIRA: Postos bandeirados só podem comprar da própria bandeira
             .filter(s => {
                 const supplierBandeira = s.bandeira || 'bandeira_branca';
+                
                 // Bandeira branca pode comprar de qualquer um
                 if (postoBandeira === 'bandeira_branca') return true;
-                // Postos bandeirados só podem comprar da própria bandeira
-                return supplierBandeira === postoBandeira || supplierBandeira === 'bandeira_branca';
+                // Postos bandeirados só podem comprar da própria bandeira (NÃO aceita mais bandeira_branca)
+                return supplierBandeira === postoBandeira;
+            })
+            // FILTRO DE BASE DO GRUPO: Se grupo tem bases específicas, filtrar fornecedores
+            .filter(s => {
+                if (!groupBaseCityIds || groupBaseCityIds.length === 0) return true;
+                // Fornecedor deve ter pelo menos uma base em comum com o grupo
+                return (s.city_ids || []).some(cityId => groupBaseCityIds.includes(cityId));
             })
             .map(supplier => {
                 // Filtrar preços pela base selecionada (se houver)
@@ -311,8 +325,13 @@ const Dashboard = () => {
                     }
                     baseUsed = selectedBase.name;
                 } else {
-                    // Senão, buscar melhor frete entre todas as bases do fornecedor
-                    (supplier.city_ids || []).forEach(originCityId => {
+                    // Senão, buscar melhor frete entre bases do fornecedor
+                    // Se grupo tem bases definidas, usar apenas essas; senão usar todas as bases do fornecedor
+                    const basesToCheck = groupBaseCityIds && groupBaseCityIds.length > 0
+                        ? (supplier.city_ids || []).filter(cityId => groupBaseCityIds.includes(cityId))
+                        : (supplier.city_ids || []);
+                    
+                    basesToCheck.forEach(originCityId => {
                         const route = freightRoutes.find(r => 
                             r.origin_city_id === originCityId && 
                             r.destination_city_id === destinationCityId
@@ -342,7 +361,7 @@ const Dashboard = () => {
             })
             .filter(Boolean)
             .sort((a, b) => a.finalPrice - b.finalPrice);
-    }, [selectedFuel, selectedDestination, selectedBase, dailyPrices, suppliers, freightRoutes, baseCities]);
+    }, [selectedFuel, selectedDestination, selectedBase, selectedGroup, dailyPrices, suppliers, freightRoutes, baseCities, groups]);
 
     // Calcular quais combustíveis têm preço na base + grupo selecionados
     const availableFuels = useMemo(() => {
@@ -532,7 +551,13 @@ Melhor Custo: ${comparisonData[0].name} @ ${comparisonData[0].finalPrice.toLocal
                                 <SelectContent><SelectItem value="Todos">Todos os Grupos</SelectItem>{groups.map(g => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}</SelectContent>
                             </Select>
                             {/* Destino - Postos (Destinos) */}
-                            <Select value={selectedDestination?.id || ''} onValueChange={id => setSelectedDestination(postos.find(p => p.id === id))}>
+                            <Select 
+                                value={selectedDestination?.id || ''} 
+                                onValueChange={id => {
+                                    const newPosto = postos.find(p => p.id === id);
+                                    setSelectedDestination(newPosto);
+                                }}
+                            >
                                 <SelectTrigger className="w-full sm:w-[200px] bg-background"><SelectValue placeholder="Selecione o Destino..." /></SelectTrigger>
                                 <SelectContent>{filteredPostos.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
                             </Select>
@@ -543,6 +568,7 @@ Melhor Custo: ${comparisonData[0].name} @ ${comparisonData[0].finalPrice.toLocal
 
             {/* Análise de Melhores Custos - Largura Total */}
             <motion.div 
+                key={`analysis-${selectedDestination?.id}-${selectedFuel}`}
                 initial={{ opacity: 0, y: 20 }} 
                 animate={{ opacity: 1, y: 0, transition: { delay: 0.2 } }}
                 className="bg-card border rounded-lg p-6"
@@ -550,6 +576,7 @@ Melhor Custo: ${comparisonData[0].name} @ ${comparisonData[0].finalPrice.toLocal
                 <BestCostAnalysis
                     selectedGroup={selectedGroup}
                     selectedFuel={selectedFuel}
+                    selectedDestination={selectedDestination}
                     baseCities={baseCities}
                     groups={groups}
                     postos={postos}
@@ -584,6 +611,7 @@ Melhor Custo: ${comparisonData[0].name} @ ${comparisonData[0].finalPrice.toLocal
             </motion.div>
             
             <ChartsSection 
+                key={`charts-${selectedDestination?.id}-${selectedFuel}`}
                 results={comparisonData} 
                 suppliers={suppliers} 
                 postos={postos} 
@@ -595,6 +623,7 @@ Melhor Custo: ${comparisonData[0].name} @ ${comparisonData[0].finalPrice.toLocal
 
             {/* Matriz Completa de Preços - Colapsável */}
             <ComprehensivePriceMatrix
+                key={`matrix-${selectedDestination?.id}-${selectedFuel}`}
                 selectedGroup={selectedGroup}
                 groups={groups}
                 postos={postos}

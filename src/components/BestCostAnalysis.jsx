@@ -7,7 +7,8 @@ import { Label } from '@/components/ui/label';
 
 const BestCostAnalysis = ({ 
   selectedGroup, 
-  selectedFuel, 
+  selectedFuel,
+  selectedDestination,
   baseCities = [],
   groups = [],
   postos = [],
@@ -27,10 +28,16 @@ const BestCostAnalysis = ({
     const group = groups.find(g => g.id === selectedGroup);
     if (!group) return null;
 
-    // Postos do grupo selecionado
-    const groupPostos = postos.filter(p => 
-      (p.group_ids || []).includes(selectedGroup)
-    );
+    // Se há posto selecionado, usar apenas ele; senão usar todos do grupo
+    const groupPostos = selectedDestination 
+      ? [selectedDestination]
+      : postos.filter(p => (p.group_ids || []).includes(selectedGroup));
+
+    console.log('🏆 BestCostAnalysis:', {
+      selectedDestination: selectedDestination?.name,
+      groupPostos: groupPostos.map(p => p.name),
+      postoCount: groupPostos.length
+    });
 
     if (groupPostos.length === 0) return null;
 
@@ -55,9 +62,9 @@ const BestCostAnalysis = ({
           // FILTRO DE BANDEIRA: Verificar compatibilidade
           if (supplier) {
             const supplierBandeira = supplier.bandeira || 'bandeira_branca';
-            // Se posto é bandeirado, só aceita fornecedor da mesma bandeira ou bandeira branca
+            // Se posto é bandeirado, só aceita fornecedor da mesma bandeira (NÃO aceita bandeira_branca)
             if (postoBandeira !== 'bandeira_branca') {
-              if (supplierBandeira !== postoBandeira && supplierBandeira !== 'bandeira_branca') {
+              if (supplierBandeira !== postoBandeira) {
                 return null; // Fornecedor incompatível
               }
             }
@@ -151,7 +158,7 @@ const BestCostAnalysis = ({
       savingsPercent,
       fuelName: settings.fuelTypes?.[selectedFuel]?.name || selectedFuel
     };
-  }, [selectedGroup, selectedFuel, baseCities, groups, postos, dailyPrices, suppliers, freightRoutes, settings, suppliersPerBase]);
+  }, [selectedGroup, selectedFuel, selectedDestination, baseCities, groups, postos, dailyPrices, suppliers, freightRoutes, settings, suppliersPerBase]);
 
   if (!analysis) {
     return (

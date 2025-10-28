@@ -62,8 +62,8 @@ const Analysis = () => {
     try {
       const [pricesRes, suppliersRes, baseCitiesRes, settingsRes, oilRes] = await Promise.all([
         supabase.from('daily_prices').select('date, supplier_id, base_city_id, prices').eq('user_id', user.id).gte('date', fromDate),
-        supabase.from('suppliers').select('id, name').eq('user_id', user.id),
-        supabase.from('base_cities').select('id, name').eq('user_id', user.id).eq('is_base', true),
+        supabase.from('suppliers').select('id, name, city_ids').eq('user_id', user.id),
+        supabase.from('cities').select('id, name').eq('user_id', user.id),
         supabase.from('user_settings').select('settings').eq('user_id', user.id).maybeSingle(),
         supabase.from('oil_prices').select('date, wti_price, brent_price').gte('date', fromDate),
       ]);
@@ -88,7 +88,21 @@ const Analysis = () => {
       }
 
       setSuppliers(suppliersRes.data || []);
-      setBaseCities(baseCitiesRes.data || []);
+      
+      // Filtrar apenas cidades que são bases (city_ids dos fornecedores)
+      const supplierCityIds = new Set();
+      (suppliersRes.data || []).forEach(supplier => {
+        (supplier.city_ids || []).forEach(cityId => supplierCityIds.add(cityId));
+      });
+      const onlyBaseCities = (baseCitiesRes.data || []).filter(city => supplierCityIds.has(city.id));
+      
+      console.log('🏙️ Base Cities Debug:', {
+        allCities: baseCitiesRes.data?.length,
+        supplierCityIds: Array.from(supplierCityIds),
+        onlyBaseCities: onlyBaseCities.map(c => c.name)
+      });
+      
+      setBaseCities(onlyBaseCities);
       setSettings(userSettings);
       setOilPrices(oilRes.data || []);
 

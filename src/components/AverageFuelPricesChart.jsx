@@ -26,7 +26,7 @@ const CustomTooltip = ({ active, payload, label }) => {
   return null;
 };
 
-const AverageFuelPricesChart = () => {
+const AverageFuelPricesChart = ({ selectedBase = 'all', baseCities = [] }) => {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -49,7 +49,7 @@ const AverageFuelPricesChart = () => {
       const [pricesRes, settingsRes] = await Promise.all([
         supabase
           .from('daily_prices')
-          .select('date, supplier_id, prices')
+          .select('date, supplier_id, base_city_id, prices')
           .eq('user_id', user.id)
           .gte('date', fromDate)
           .order('date', { ascending: true }),
@@ -79,15 +79,20 @@ const AverageFuelPricesChart = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, period]);
 
+  const filteredDailyPrices = useMemo(() => {
+    if (selectedBase === 'all') return dailyPrices;
+    return dailyPrices.filter(item => item.base_city_id === selectedBase);
+  }, [dailyPrices, selectedBase]);
+
   const chartData = useMemo(() => {
-    if (!dailyPrices.length) return [];
+    if (!filteredDailyPrices.length) return [];
 
     const fuelTypes = settings.fuelTypes || {};
     
     // Group prices by date and calculate averages
     const dateMap = {};
     
-    dailyPrices.forEach(item => {
+    filteredDailyPrices.forEach(item => {
       const date = new Date(item.date).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
       
       if (!dateMap[date]) {
@@ -121,7 +126,7 @@ const AverageFuelPricesChart = () => {
     });
 
     return result;
-  }, [dailyPrices, settings]);
+  }, [filteredDailyPrices, settings]);
 
   const fuelNames = useMemo(() => {
     if (!chartData.length) return [];
@@ -133,6 +138,11 @@ const AverageFuelPricesChart = () => {
     });
     return Array.from(names);
   }, [chartData]);
+
+  const selectedBaseName = useMemo(() => {
+    if (selectedBase === 'all') return 'Todas as Bases';
+    return baseCities.find(base => base.id === selectedBase)?.name || 'Base desconhecida';
+  }, [selectedBase, baseCities]);
 
   if (loading) {
     return (
@@ -169,7 +179,7 @@ const AverageFuelPricesChart = () => {
           <div>
             <h3 className="text-xl font-bold text-foreground">Médias Gerais por Combustível</h3>
             <p className="text-sm text-muted-foreground">
-              Preço médio de todos os fornecedores por tipo de combustível
+              Preço médio de todos os fornecedores por tipo de combustível · {selectedBaseName}
             </p>
           </div>
         </div>

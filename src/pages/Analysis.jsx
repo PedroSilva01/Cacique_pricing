@@ -50,70 +50,52 @@ const Analysis = () => {
 
   const { user } = useAuth();
 
-  const fetchData = useCallback(async () => {
+  const fetchFuelData = useCallback(async (period) => {
     if (!user) return;
     setLoading(true);
     setError(null);
-    const daysAgo = fuelPeriod === 'weekly' ? 7 : 30;
+    const daysAgo = period === 'weekly' ? 7 : 30;
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - daysAgo);
     const fromDate = startDate.toISOString().split('T')[0];
 
     try {
-      const [pricesRes, suppliersRes, baseCitiesRes, settingsRes, oilRes] = await Promise.all([
+      const [pricesRes, suppliersRes, baseCitiesRes, settingsRes] = await Promise.all([
         supabase.from('daily_prices').select('date, supplier_id, base_city_id, prices').eq('user_id', user.id).gte('date', fromDate),
         supabase.from('suppliers').select('id, name, city_ids').eq('user_id', user.id),
-        supabase.from('cities').select('id, name').eq('user_id', user.id),
+        supabase.from('base_cities').select('id, name').eq('user_id', user.id).order('name'),
         supabase.from('user_settings').select('settings').eq('user_id', user.id).maybeSingle(),
-        supabase.from('oil_prices').select('date, wti_price, brent_price').gte('date', fromDate),
       ]);
 
       if (pricesRes.error) throw pricesRes.error;
       if (suppliersRes.error) throw suppliersRes.error;
       if (baseCitiesRes.error) throw baseCitiesRes.error;
       if (settingsRes.error && settingsRes.error.code !== 'PGRST116') throw settingsRes.error;
-      if (oilRes.error) throw oilRes.error;
-      
+
       const userSettings = settingsRes.data?.settings || defaultSettings;
       const currentFuelTypes = userSettings.fuelTypes || {};
       
       // Initialize selected fuels if empty
-      if (selectedFuels.length === 0 && Object.keys(currentFuelTypes).length > 0) {
-        setSelectedFuels([Object.keys(currentFuelTypes)[0]]);
-      }
-      
+      setSelectedFuels(prev => {
+        if (prev.length > 0) return prev;
+        const firstFuel = Object.keys(currentFuelTypes)[0];
+        return firstFuel ? [firstFuel] : prev;
+      });
+
       // Initialize selected suppliers if empty
-      if (selectedSuppliers.length === 0 && (suppliersRes.data || []).length > 0) {
-        setSelectedSuppliers((suppliersRes.data || []).map(s => s.id));
-      }
+      setSelectedSuppliers(prev => {
+        if (prev.length > 0) return prev;
+        return (suppliersRes.data || []).map(s => s.id);
+      });
 
       setSuppliers(suppliersRes.data || []);
       
-      // Filtrar apenas cidades que são bases (city_ids dos fornecedores)
-      const supplierCityIds = new Set();
-      (suppliersRes.data || []).forEach(supplier => {
-        (supplier.city_ids || []).forEach(cityId => supplierCityIds.add(cityId));
-      });
-      const onlyBaseCities = (baseCitiesRes.data || []).filter(city => supplierCityIds.has(city.id));
-      
-      console.log('🏙️ Base Cities Debug:', {
-        allCities: baseCitiesRes.data?.length,
-        supplierCityIds: Array.from(supplierCityIds),
-        onlyBaseCities: onlyBaseCities.map(c => c.name)
-      });
-      
-      setBaseCities(onlyBaseCities);
+      setBaseCities(baseCitiesRes.data || []);
       setSettings(userSettings);
-      setOilPrices(oilRes.data || []);
 
       // Flatten all prices for selected fuels and suppliers
       const relevantPrices = [];
       pricesRes.data.forEach(priceRecord => {
-        // Filtrar por base se não for "all"
-        if (selectedBase !== 'all' && priceRecord.base_city_id !== selectedBase) {
-          return;
-        }
-        
         if (priceRecord.prices) {
           Object.keys(priceRecord.prices).forEach(fuelKey => {
             if (priceRecord.prices[fuelKey]) {
@@ -136,21 +118,54 @@ const Analysis = () => {
     } finally {
       setLoading(false);
     }
-  }, [user, selectedFuels, selectedSuppliers, selectedBase, fuelPeriod]);
+  }, [user]);
+
+  const fetchOilData = useCallback(async (period) => {
+    if (!user) return;
+
+    const daysAgo = period === 'weekly' ? 7 : 30;
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - daysAgo);
+    const fromDate = startDate.toISOString().split('T')[0];
+
+    try {
+      const { data, error } = await supabase
+        .from('oil_prices')
+        .select('date, wti_price, brent_price')
+        .gte('date', fromDate);
+
+      if (error) throw error;
+      setOilPrices(data || []);
+    } catch (err) {
+      console.error('Erro ao carregar preços do petróleo:', err);
+      setOilPrices([]);
+    }
+  }, [user]);
 
   useEffect(() => {
     if (user) {
-      fetchData();
+      fetchFuelData(fuelPeriod);
     }
-  }, [user, fetchData]);
-  
+  }, [user, fuelPeriod, fetchFuelData]);
+
+  useEffect(() => {
+    if (user) {
+      fetchOilData(oilPeriod);
+    }
+  }, [oilPeriod, user, fetchOilData]);
+
+  const filteredDbData = useMemo(() => {
+    if (selectedBase === 'all') return dbData;
+    return dbData.filter(item => item.base_city_id === selectedBase);
+  }, [dbData, selectedBase]);
+
   const fuelPriceChartData = useMemo(() => {
-      if (!dbData.length || !suppliers.length || selectedFuels.length === 0 || selectedSuppliers.length === 0) return [];
+      if (!filteredDbData.length || !suppliers.length || selectedFuels.length === 0 || selectedSuppliers.length === 0) return [];
       
       const supplierMap = new Map(suppliers.map(s => [s.id, s.name]));
       
       // Filter by selected suppliers and fuels
-      const filteredData = dbData.filter(item => 
+      const filteredData = filteredDbData.filter(item => 
         selectedSuppliers.includes(item.supplier_id) && 
         selectedFuels.includes(item.fuel_type)
       );
@@ -174,7 +189,7 @@ const Analysis = () => {
       }, {});
       
       return Object.values(pricesByDate).sort((a,b) => new Date(a.date.split('/').reverse().join('-')) - new Date(b.date.split('/').reverse().join('-')));
-  }, [dbData, suppliers, selectedFuels, selectedSuppliers, fuelTypes]);
+  }, [filteredDbData, suppliers, selectedFuels, selectedSuppliers, fuelTypes]);
 
 
   const oilPriceChartData = useMemo(() => {
@@ -421,7 +436,7 @@ const Analysis = () => {
         </div>
       </div>
 
-      <AverageFuelPricesChart />
+      <AverageFuelPricesChart selectedBase={selectedBase} baseCities={baseCities} />
     </motion.div>
   );
 };

@@ -2,7 +2,7 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Fuel, Zap, LogOut, BarChart2, LineChart, DollarSign, SlidersHorizontal, Sun, Moon } from 'lucide-react';
+import { Fuel, Zap, LogOut, BarChart2, LineChart, DollarSign, SlidersHorizontal, Sun, Moon, Route } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -56,6 +56,10 @@ const Header = () => {
             <NavLink to="/settings" className={navLinkClass}>
               <SlidersHorizontal className="w-4 h-4" />
               Configurações
+            </NavLink>
+            <NavLink to="/freight-detail" className={navLinkClass}>
+              <Route className="w-4 h-4" />
+              Frete
             </NavLink>
           </nav>
 

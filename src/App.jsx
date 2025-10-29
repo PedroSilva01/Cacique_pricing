@@ -9,6 +9,7 @@ import Dashboard from '@/pages/Dashboard';
 import Analysis from '@/pages/Analysis';
 import PriceEntry from '@/pages/PriceEntry';
 import SettingsPage from '@/pages/SettingsPage';
+import FreightDetail from '@/pages/FreightDetail';
 
 function App() {
   const { session, loading } = useAuth();
@@ -35,6 +36,7 @@ function App() {
           <Route path="price-entry" element={<PriceEntry />} />
           <Route path="analysis" element={<Analysis />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="freight-detail" element={<FreightDetail />} />
           <Route path="*" element={<Navigate to="/dashboard" />} />
         </Route>
       )}

@@ -526,7 +526,38 @@ const RouteModal = ({ data, baseCities = [], cities, settings, onClose, onSave }
             <div><Label>Origem (Base)</Label><Select value={d.origin_city_id || ''} onValueChange={v => setD({ ...d, origin_city_id: v })}><SelectTrigger><SelectValue placeholder="Selecione..." /></SelectTrigger><SelectContent>{baseCities.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent></Select></div>
             <div><Label>Destino (Cidade)</Label><Select value={d.destination_city_id || ''} onValueChange={v => setD({ ...d, destination_city_id: v })}><SelectTrigger><SelectValue placeholder="Selecione..." /></SelectTrigger><SelectContent>{cities.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent></Select></div>
         </div>
-        <div><Label className="font-semibold">Custos de Frete (R$/L)</Label><div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-2 p-4 border rounded-md bg-background">{Object.keys(settings.vehicleTypes).map(k => <div key={k}><Label className="text-sm">{settings.vehicleTypes[k].name}</Label><Input type="text" inputMode="decimal" step="0.001" placeholder="0.000" value={costInputs[k] || ''} onChange={e => onCost(k, e.target.value)} /></div>)}</div></div>
+        <div className="grid md:grid-cols-2 gap-4">
+            <div>
+                <Label className="font-semibold">Custos de Frete (R$/L)</Label>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-2 p-4 border rounded-md bg-background">
+                    {Object.keys(settings.vehicleTypes).map(k => (
+                        <div key={k}>
+                            <Label className="text-sm">{settings.vehicleTypes[k].name}</Label>
+                            <Input
+                                type="text"
+                                inputMode="decimal"
+                                step="0.001"
+                                placeholder="0.000"
+                                value={costInputs[k] || ''}
+                                onChange={e => onCost(k, e.target.value)}
+                            />
+                        </div>
+                    ))}
+                </div>
+            </div>
+            <div>
+                <Label className="font-semibold">Distância (km) <span className="text-xs text-muted-foreground">(opcional)</span></Label>
+                <Input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    placeholder="Ex: 245.5"
+                    value={d.distance_km ?? ''}
+                    onChange={e => setD({ ...d, distance_km: e.target.value === '' ? null : parseFloat(e.target.value) })}
+                />
+                <p className="text-xs text-muted-foreground mt-1">Informe a distância aproximada entre a base e a cidade destino, caso deseje.</p>
+            </div>
+        </div>
     </ModalWrapper>; 
 };
 

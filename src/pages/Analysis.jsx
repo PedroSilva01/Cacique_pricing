@@ -1,18 +1,26 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, Cell, ReferenceLine } from 'recharts';
 import { supabase } from '@/lib/customSupabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { RefreshCw, AlertTriangle, LineChart as LineChartIcon, Fuel, TrendingUp } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Button } from '@/components/ui/button';
 import { Calendar } from 'lucide-react';
 import { defaultSettings } from '@/lib/mockData';
 
 const COLORS = ['#3b82f6', '#10b981', '#ef4444', '#f97316', '#8b5cf6', '#ec4899', '#64748b', '#f59e0b', '#34d399', '#a78bfa'];
+
+const PERIOD_OPTIONS = {
+  weekly: { days: 7, label: 'Semanal (7d)' },
+  monthly: { days: 30, label: 'Mensal (30d)' },
+  bimonthly: { days: 60, label: 'Bimestral (60d)' },
+  quarterly: { days: 90, label: 'Trimestral (90d)' },
+  semiannual: { days: 180, label: 'Semestral (180d)' },
+  annual: { days: 365, label: 'Anual (365d)' },
+};
 
 const CustomTooltip = ({ active, payload, label, currency = 'BRL' }) => {
   if (active && payload && payload.length) {
@@ -40,20 +48,44 @@ const Analysis = () => {
   const [error, setError] = useState(null);
   
   const fuelTypes = useMemo(() => settings.fuelTypes || {}, [settings]);
-  const [selectedFuels, setSelectedFuels] = useState([]);
-  const [selectedSuppliers, setSelectedSuppliers] = useState([]);
-  const [selectedBase, setSelectedBase] = useState('all');
-  const [fuelPeriod, setFuelPeriod] = useState('weekly'); // 'weekly' or 'monthly'
-  const [oilPeriod, setOilPeriod] = useState('monthly'); // 'weekly' or 'monthly'
-  const [showFilters, setShowFilters] = useState(true);
+  const [fuelBase, setFuelBase] = useState('all');
+  const [fuelSuppliers, setFuelSuppliers] = useState([]);
+  const [fuelFuels, setFuelFuels] = useState([]);
+
+  const [variationBase, setVariationBase] = useState('all');
+  const [variationSuppliers, setVariationSuppliers] = useState([]);
+  const [variationFuels, setVariationFuels] = useState([]);
+  const [variationPeriod, setVariationPeriod] = useState('monthly');
+
+  const [fuelPeriod, setFuelPeriod] = useState('monthly');
+  const [oilPeriod, setOilPeriod] = useState('monthly');
 
   const { user } = useAuth();
 
-  const fetchFuelData = useCallback(async (period) => {
+  const supplierOptions = useMemo(
+    () => suppliers.map((supplier) => ({ id: String(supplier.id), name: supplier.name })),
+    [suppliers]
+  );
+
+  const baseOptions = useMemo(
+    () => baseCities.map((base) => ({ id: String(base.id), name: base.name })),
+    [baseCities]
+  );
+
+  const fuelOptions = useMemo(
+    () => Object.entries(fuelTypes).map(([key, fuel]) => ({ id: key, name: fuel?.name || key })),
+    [fuelTypes]
+  );
+
+  const fetchFuelData = useCallback(async () => {
     if (!user) return;
     setLoading(true);
     setError(null);
-    const daysAgo = period === 'weekly' ? 7 : 30;
+
+    const fuelDays = PERIOD_OPTIONS[fuelPeriod]?.days ?? PERIOD_OPTIONS.monthly.days;
+    const variationDays = PERIOD_OPTIONS[variationPeriod]?.days ?? PERIOD_OPTIONS.monthly.days;
+    const daysAgo = Math.max(fuelDays, variationDays);
+
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - daysAgo);
     const fromDate = startDate.toISOString().split('T')[0];
@@ -73,23 +105,49 @@ const Analysis = () => {
 
       const userSettings = settingsRes.data?.settings || defaultSettings;
       const currentFuelTypes = userSettings.fuelTypes || {};
-      
-      // Initialize selected fuels if empty
-      setSelectedFuels(prev => {
-        if (prev.length > 0) return prev;
-        const firstFuel = Object.keys(currentFuelTypes)[0];
-        return firstFuel ? [firstFuel] : prev;
+      const availableFuelKeys = Object.keys(currentFuelTypes);
+      const supplierIds = (suppliersRes.data || []).map(s => String(s.id));
+      const baseIds = (baseCitiesRes.data || []).map(b => String(b.id));
+
+      setFuelFuels(prev => {
+        const filtered = prev.filter(key => availableFuelKeys.includes(key));
+        if (filtered.length > 0) return filtered;
+        if (availableFuelKeys.length > 0) return [...availableFuelKeys];
+        return [];
       });
 
-      // Initialize selected suppliers if empty
-      setSelectedSuppliers(prev => {
-        if (prev.length > 0) return prev;
-        return (suppliersRes.data || []).map(s => s.id);
+      setVariationFuels(prev => {
+        const filtered = prev.filter(key => availableFuelKeys.includes(key));
+        if (filtered.length > 0) return filtered;
+        if (availableFuelKeys.length > 0) return [...availableFuelKeys];
+        return [];
       });
 
-      setSuppliers(suppliersRes.data || []);
-      
-      setBaseCities(baseCitiesRes.data || []);
+      setFuelSuppliers(prev => {
+        const filtered = prev.filter(id => supplierIds.includes(id));
+        if (filtered.length > 0) return filtered;
+        return supplierIds;
+      });
+
+      setVariationSuppliers(prev => {
+        const filtered = prev.filter(id => supplierIds.includes(id));
+        if (filtered.length > 0) return filtered;
+        return supplierIds;
+      });
+
+      setFuelBase(prev => {
+        if (prev === 'all' || baseIds.includes(prev)) return prev;
+        return 'all';
+      });
+
+      setVariationBase(prev => {
+        if (prev === 'all' || baseIds.includes(prev)) return prev;
+        return 'all';
+      });
+
+      setSuppliers((suppliersRes.data || []).map((supplier) => ({ ...supplier, id: String(supplier.id) })));
+
+      setBaseCities((baseCitiesRes.data || []).map((base) => ({ ...base, id: String(base.id) })));
       setSettings(userSettings);
 
       // Flatten all prices for selected fuels and suppliers
@@ -100,8 +158,8 @@ const Analysis = () => {
             if (priceRecord.prices[fuelKey]) {
               relevantPrices.push({
                 date: priceRecord.date,
-                supplier_id: priceRecord.supplier_id,
-                base_city_id: priceRecord.base_city_id,
+                supplier_id: String(priceRecord.supplier_id),
+                base_city_id: priceRecord.base_city_id != null ? String(priceRecord.base_city_id) : null,
                 fuel_type: fuelKey,
                 price: priceRecord.prices[fuelKey]
               });
@@ -117,12 +175,13 @@ const Analysis = () => {
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  }, [user, fuelPeriod, variationPeriod]);
 
-  const fetchOilData = useCallback(async (period) => {
+  const fetchOilData = useCallback(async () => {
     if (!user) return;
 
-    const daysAgo = period === 'weekly' ? 7 : 30;
+    const periodConfig = PERIOD_OPTIONS[oilPeriod] || PERIOD_OPTIONS.monthly;
+    const daysAgo = periodConfig.days;
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - daysAgo);
     const fromDate = startDate.toISOString().split('T')[0];
@@ -139,37 +198,44 @@ const Analysis = () => {
       console.error('Erro ao carregar preços do petróleo:', err);
       setOilPrices([]);
     }
-  }, [user]);
+  }, [user, oilPeriod]);
 
   useEffect(() => {
     if (user) {
-      fetchFuelData(fuelPeriod);
+      fetchFuelData();
     }
-  }, [user, fuelPeriod, fetchFuelData]);
+  }, [user, fetchFuelData]);
 
   useEffect(() => {
     if (user) {
-      fetchOilData(oilPeriod);
+      fetchOilData();
     }
-  }, [oilPeriod, user, fetchOilData]);
+  }, [user, fetchOilData]);
 
-  const filteredDbData = useMemo(() => {
-    if (selectedBase === 'all') return dbData;
-    return dbData.filter(item => item.base_city_id === selectedBase);
-  }, [dbData, selectedBase]);
+  const filteredFuelData = useMemo(() => {
+    return dbData.filter(item => {
+      const matchesBase = fuelBase === 'all' || item.base_city_id === fuelBase;
+      const matchesSupplier = fuelSuppliers.length === 0 || fuelSuppliers.includes(item.supplier_id);
+      const matchesFuel = fuelFuels.length === 0 || fuelFuels.includes(item.fuel_type);
+      return matchesBase && matchesSupplier && matchesFuel;
+    });
+  }, [dbData, fuelBase, fuelSuppliers, fuelFuels]);
+
+  const filteredVariationData = useMemo(() => {
+    return dbData.filter(item => {
+      const matchesBase = variationBase === 'all' || item.base_city_id === variationBase;
+      const matchesSupplier = variationSuppliers.length === 0 || variationSuppliers.includes(item.supplier_id);
+      const matchesFuel = variationFuels.length === 0 || variationFuels.includes(item.fuel_type);
+      return matchesBase && matchesSupplier && matchesFuel;
+    });
+  }, [dbData, variationBase, variationSuppliers, variationFuels]);
 
   const fuelPriceChartData = useMemo(() => {
-      if (!filteredDbData.length || !suppliers.length || selectedFuels.length === 0 || selectedSuppliers.length === 0) return [];
+      if (!filteredFuelData.length || !suppliers.length || fuelFuels.length === 0 || fuelSuppliers.length === 0) return [];
       
       const supplierMap = new Map(suppliers.map(s => [s.id, s.name]));
       
-      // Filter by selected suppliers and fuels
-      const filteredData = filteredDbData.filter(item => 
-        selectedSuppliers.includes(item.supplier_id) && 
-        selectedFuels.includes(item.fuel_type)
-      );
-      
-      const pricesByDate = filteredData.reduce((acc, item) => {
+      const pricesByDate = filteredFuelData.reduce((acc, item) => {
           const date = new Date(item.date).toLocaleDateString('pt-BR', { timeZone: 'UTC' });
           const supplierName = supplierMap.get(item.supplier_id);
           const fuelName = fuelTypes[item.fuel_type]?.name || item.fuel_type;
@@ -188,12 +254,12 @@ const Analysis = () => {
       }, {});
       
       return Object.values(pricesByDate).sort((a,b) => new Date(a.date.split('/').reverse().join('-')) - new Date(b.date.split('/').reverse().join('-')));
-  }, [filteredDbData, suppliers, selectedFuels, selectedSuppliers, fuelTypes]);
+  }, [filteredFuelData, suppliers, fuelFuels, fuelSuppliers, fuelTypes]);
 
 
   const oilPriceChartData = useMemo(() => {
-    // Filter by oil period
-    const daysAgo = oilPeriod === 'weekly' ? 7 : 30;
+    const periodConfig = PERIOD_OPTIONS[oilPeriod] || PERIOD_OPTIONS.monthly;
+    const daysAgo = periodConfig.days;
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - daysAgo);
     
@@ -219,12 +285,141 @@ const Analysis = () => {
   const fuelLineNames = getLineNames(fuelPriceChartData);
   const oilLineNames = getLineNames(oilPriceChartData);
 
-  const renderChart = (title, icon, data, lineNames, tooltipCurrency, noDataMessage) => (
+  const variationRankingData = useMemo(() => {
+    if (!filteredVariationData.length || !suppliers.length || variationFuels.length === 0 || variationSuppliers.length === 0) {
+      return [];
+    }
+
+    const supplierMap = new Map(suppliers.map(s => [s.id, s.name]));
+    const grouped = new Map();
+
+    const periodConfig = PERIOD_OPTIONS[variationPeriod] || PERIOD_OPTIONS.monthly;
+    const daysAgo = periodConfig.days;
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - daysAgo);
+
+    filteredVariationData.forEach((item) => {
+      const itemDate = new Date(item.date);
+      if (itemDate < cutoffDate) {
+        return;
+      }
+
+      const supplierName = supplierMap.get(item.supplier_id);
+      if (!supplierName) return;
+
+      const fuelName = fuelTypes[item.fuel_type]?.name || item.fuel_type;
+      const key = `${supplierName} - ${fuelName}`;
+      const price = Number(item.price);
+      if (!Number.isFinite(price)) return;
+
+      if (!grouped.has(key)) {
+        grouped.set(key, []);
+      }
+      grouped.get(key).push({ date: item.date, price });
+    });
+
+    const variationData = Array.from(grouped.entries()).map(([label, entries]) => {
+      const ordered = entries.sort((a, b) => new Date(a.date) - new Date(b.date));
+      const firstPrice = ordered[0]?.price;
+      const lastPrice = ordered[ordered.length - 1]?.price;
+
+      if (!Number.isFinite(firstPrice) || !Number.isFinite(lastPrice) || firstPrice === 0) {
+        return null;
+      }
+
+      const variation = ((lastPrice - firstPrice) / firstPrice) * 100;
+      return {
+        label,
+        variation,
+      };
+    }).filter(Boolean);
+
+    return variationData.sort((a, b) => b.variation - a.variation);
+  }, [filteredVariationData, suppliers, variationFuels, variationSuppliers, variationPeriod, fuelTypes]);
+
+  const formatVariation = (value) => {
+    if (!Number.isFinite(value)) return '0.00%';
+    const sign = value >= 0 ? '+' : '';
+    return `${sign}${value.toFixed(2)}%`;
+  };
+
+  const renderVariationRankingChart = (title, filters = null) => (
+    <div className="glass-effect rounded-xl p-6 shadow-sm flex flex-col border overflow-hidden">
+      <div className="flex items-center gap-3 mb-4">
+        <TrendingUp className="w-6 h-6 text-primary" />
+        <h2 className="text-xl font-bold text-foreground">{title}</h2>
+      </div>
+      {filters && <div className="space-y-4 mb-6">{filters}</div>}
+      <div className="h-[400px] w-full">
+        {loading && <div className="flex justify-center items-center h-full"><RefreshCw className="w-12 h-12 text-primary animate-spin" /></div>}
+        {!loading && error && (
+          <div className="flex flex-col justify-center items-center h-full text-destructive">
+            <AlertTriangle className="w-12 h-12 mb-4" />
+            <p className="font-semibold">{error}</p>
+          </div>
+        )}
+        {!loading && !error && variationRankingData.length > 0 && (
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart
+              data={variationRankingData}
+              layout="vertical"
+              margin={{ top: 5, right: 30, left: 60, bottom: 20 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border) / 0.4)" horizontal={false} />
+              <XAxis
+                type="number"
+                tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
+                tickFormatter={formatVariation}
+              />
+              <YAxis
+                type="category"
+                dataKey="label"
+                width={220}
+                tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 11 }}
+              />
+              <ReferenceLine x={0} stroke="hsl(var(--border))" strokeDasharray="4 2" />
+              <Tooltip
+                cursor={{ fill: 'hsl(var(--muted) / 0.2)' }}
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) return null;
+                  const value = payload[0].value;
+                  return (
+                    <div className="glass-effect rounded-lg p-4 border shadow-md bg-background/80 backdrop-blur-sm">
+                      <p className="font-semibold text-foreground mb-2">{label}</p>
+                      <p className="text-sm">Variação: {formatVariation(value)}</p>
+                    </div>
+                  );
+                }}
+              />
+              <Bar dataKey="variation" radius={[6, 6, 6, 6]}>
+                {variationRankingData.map((entry) => (
+                  <Cell
+                    key={entry.label}
+                    fill={entry.variation >= 0 ? '#22c55e' : '#ef4444'}
+                  />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+        {!loading && !error && variationRankingData.length === 0 && (
+          <div className="flex flex-col justify-center items-center h-full text-muted-foreground">
+            <LineChartIcon className="w-12 h-12 mb-4" />
+            <p className="font-semibold">Sem registros suficientes para calcular a variação.</p>
+            <p className="text-sm">Verifique os filtros escolhidos ou o período selecionado.</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const renderChart = (title, icon, data, lineNames, tooltipCurrency, noDataMessage, filters = null) => (
     <div className="glass-effect rounded-xl p-6 shadow-sm flex flex-col border overflow-hidden">
       <div className="flex items-center gap-3 mb-4">
         {icon}
         <h2 className="text-xl font-bold text-foreground">{title}</h2>
       </div>
+      {filters && <div className="space-y-4 mb-6">{filters}</div>}
       <div className="h-[450px] w-full">
         {loading && <div className="flex justify-center items-center h-full"><RefreshCw className="w-12 h-12 text-primary animate-spin" /></div>}
         {!loading && error && <div className="flex flex-col justify-center items-center h-full text-destructive"><AlertTriangle className="w-12 h-12 mb-4" /><p className="font-semibold">{error}</p></div>}
@@ -262,181 +457,228 @@ const Analysis = () => {
     </div>
   );
 
+  const fuelBaseLabel = fuelBase !== 'all' ? baseOptions.find((b) => b.id === fuelBase)?.name : null;
+  const variationBaseLabel = variationBase !== 'all' ? baseOptions.find((b) => b.id === variationBase)?.name : null;
+  const fuelChartTitle = fuelBaseLabel
+    ? `Preços de Combustível por Fornecedor - ${fuelBaseLabel}`
+    : 'Preços de Combustível por Fornecedor - Todas as Bases';
+  const variationChartTitle = variationBaseLabel
+    ? `Ranking de Variação de Preços - ${variationBaseLabel}`
+    : 'Ranking de Variação de Preços';
+
+  const buildSupplierCheckboxes = (options, selected, setSelected, idPrefix) => (
+    <div className="space-y-2 max-h-[200px] overflow-y-auto border rounded p-3">
+      <div className="flex items-center space-x-2 mb-2">
+        <Checkbox
+          id={`${idPrefix}-suppliers-all`}
+          checked={options.length > 0 && selected.length === options.length}
+          onCheckedChange={(checked) => {
+            if (checked === true) {
+              setSelected(options.map((opt) => opt.id));
+            } else {
+              setSelected([]);
+            }
+          }}
+        />
+        <label htmlFor={`${idPrefix}-suppliers-all`} className="text-sm font-medium">
+          Selecionar Todos
+        </label>
+      </div>
+      {options.map((option) => (
+        <div key={option.id} className="flex items-center space-x-2">
+          <Checkbox
+            id={`${idPrefix}-supplier-${option.id}`}
+            checked={selected.includes(option.id)}
+            onCheckedChange={(checked) => {
+              setSelected((prev) => {
+                if (checked === true) {
+                  if (prev.includes(option.id)) return prev;
+                  return [...prev, option.id];
+                }
+                return prev.filter((id) => id !== option.id);
+              });
+            }}
+          />
+          <label htmlFor={`${idPrefix}-supplier-${option.id}`} className="text-sm">
+            {option.name}
+          </label>
+        </div>
+      ))}
+    </div>
+  );
+
+  const buildFuelCheckboxes = (options, selected, setSelected, idPrefix) => (
+    <div className="space-y-2 max-h-[200px] overflow-y-auto border rounded p-3">
+      <div className="flex items-center space-x-2 mb-2">
+        <Checkbox
+          id={`${idPrefix}-fuels-all`}
+          checked={options.length > 0 && selected.length === options.length}
+          onCheckedChange={(checked) => {
+            if (checked === true) {
+              setSelected(options.map((opt) => opt.id));
+            } else {
+              setSelected([]);
+            }
+          }}
+        />
+        <label htmlFor={`${idPrefix}-fuels-all`} className="text-sm font-medium">
+          Selecionar Todos
+        </label>
+      </div>
+      {options.map((option) => (
+        <div key={option.id} className="flex items-center space-x-2">
+          <Checkbox
+            id={`${idPrefix}-fuel-${option.id}`}
+            checked={selected.includes(option.id)}
+            onCheckedChange={(checked) => {
+              setSelected((prev) => {
+                if (checked === true) {
+                  if (prev.includes(option.id)) return prev;
+                  return [...prev, option.id];
+                }
+                return prev.filter((id) => id !== option.id);
+              });
+            }}
+          />
+          <label htmlFor={`${idPrefix}-fuel-${option.id}`} className="text-sm">
+            {option.name}
+          </label>
+        </div>
+      ))}
+    </div>
+  );
+
+  const variationFilters = (
+    <div className="grid md:grid-cols-3 gap-4">
+      <div>
+        <Label className="text-sm font-medium mb-3 block">Base de Carregamento</Label>
+        <Select value={variationBase} onValueChange={setVariationBase}>
+          <SelectTrigger>
+            <SelectValue placeholder="Selecione a base..." />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Todas as Bases</SelectItem>
+            {baseOptions.map((option) => (
+              <SelectItem key={option.id} value={option.id}>{option.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Label className="text-sm font-medium mb-3 block mt-4">Período</Label>
+        <Select value={variationPeriod} onValueChange={setVariationPeriod}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {Object.entries(PERIOD_OPTIONS).map(([key, option]) => (
+              <SelectItem key={key} value={key}>{option.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div>
+        <Label className="text-sm font-medium mb-3 block">Fornecedores</Label>
+        {buildSupplierCheckboxes(supplierOptions, variationSuppliers, setVariationSuppliers, 'variation')}
+      </div>
+      <div>
+        <Label className="text-sm font-medium mb-3 block">Combustíveis</Label>
+        {buildFuelCheckboxes(fuelOptions, variationFuels, setVariationFuels, 'variation')}
+      </div>
+    </div>
+  );
+
+  const fuelFilters = (
+    <div className="grid md:grid-cols-3 gap-4">
+      <div>
+        <Label className="text-sm font-medium mb-3 block">Base de Carregamento</Label>
+        <Select value={fuelBase} onValueChange={setFuelBase}>
+          <SelectTrigger>
+            <SelectValue placeholder="Selecione a base..." />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Todas as Bases</SelectItem>
+            {baseOptions.map((option) => (
+              <SelectItem key={option.id} value={option.id}>{option.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Label className="text-sm font-medium mb-3 block mt-4">Período</Label>
+        <Select value={fuelPeriod} onValueChange={setFuelPeriod}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {Object.entries(PERIOD_OPTIONS).map(([key, option]) => (
+              <SelectItem key={key} value={key}>{option.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div>
+        <Label className="text-sm font-medium mb-3 block">Fornecedores</Label>
+        {buildSupplierCheckboxes(supplierOptions, fuelSuppliers, setFuelSuppliers, 'fuel')}
+      </div>
+      <div>
+        <Label className="text-sm font-medium mb-3 block">Combustíveis</Label>
+        {buildFuelCheckboxes(fuelOptions, fuelFuels, setFuelFuels, 'fuel')}
+      </div>
+    </div>
+  );
+
+  const oilFilters = (
+    <div className="flex flex-wrap items-center gap-3">
+      <Calendar className="w-4 h-4 text-muted-foreground" />
+      <Label className="text-sm">Período</Label>
+      <Select value={oilPeriod} onValueChange={setOilPeriod}>
+        <SelectTrigger className="w-[160px]">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {Object.entries(PERIOD_OPTIONS).map(([key, option]) => (
+            <SelectItem key={key} value={key}>{option.label}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-8">
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <LineChartIcon className="w-8 h-8 text-primary" />
-          <div>
-            <h1 className="text-3xl font-bold text-foreground">Análise Histórica</h1>
-            <p className="text-muted-foreground">Evolução de preços - Compare fornecedores e combustíveis</p>
-          </div>
-        </div>
-        <Button variant="outline" size="sm" onClick={() => setShowFilters(v => !v)}>
-          {showFilters ? 'Ocultar Filtros' : 'Mostrar Filtros'}
-        </Button>
-      </div>
-      
-      {/* Filtros (colapsáveis) */}
-      {showFilters && (
-      <div className="bg-card border rounded-lg p-6 space-y-6">
-        <h3 className="text-lg font-semibold flex items-center gap-2">
-          <Fuel className="w-5 h-5" />
-          Filtros de Análise
-        </h3>
-        
-        <div className="grid md:grid-cols-3 gap-6">
-          {/* Filtro de Base */}
-          <div>
-            <Label className="text-sm font-medium mb-3 block">Base de Carregamento</Label>
-            <Select value={selectedBase} onValueChange={setSelectedBase}>
-              <SelectTrigger>
-                <SelectValue placeholder="Selecione a base..." />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todas as Bases</SelectItem>
-                {baseCities.map((base) => (
-                  <SelectItem key={base.id} value={base.id}>{base.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground mt-1">
-              Filtra os preços por cidade base de origem
-            </p>
-          </div>
-
-          {/* Filtro de Fornecedores */}
-          <div>
-            <Label className="text-sm font-medium mb-3 block">Fornecedores</Label>
-            <div className="space-y-2 max-h-[200px] overflow-y-auto border rounded p-3">
-              <div className="flex items-center space-x-2 mb-2">
-                <Checkbox
-                  id="select-all-suppliers"
-                  checked={selectedSuppliers.length === suppliers.length}
-                  onCheckedChange={(checked) => {
-                    setSelectedSuppliers(checked ? suppliers.map(s => s.id) : []);
-                  }}
-                />
-                <label htmlFor="select-all-suppliers" className="text-sm font-medium">
-                  Selecionar Todos
-                </label>
-              </div>
-              {suppliers.map((supplier) => (
-                <div key={supplier.id} className="flex items-center space-x-2">
-                  <Checkbox
-                    id={`supplier-${supplier.id}`}
-                    checked={selectedSuppliers.includes(supplier.id)}
-                    onCheckedChange={(checked) => {
-                      setSelectedSuppliers(prev =>
-                        checked
-                          ? [...prev, supplier.id]
-                          : prev.filter(id => id !== supplier.id)
-                      );
-                    }}
-                  />
-                  <label htmlFor={`supplier-${supplier.id}`} className="text-sm">
-                    {supplier.name}
-                  </label>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Filtro de Combustíveis */}
-          <div>
-            <Label className="text-sm font-medium mb-3 block">Combustíveis</Label>
-            <div className="space-y-2 max-h-[200px] overflow-y-auto border rounded p-3">
-              <div className="flex items-center space-x-2 mb-2">
-                <Checkbox
-                  id="select-all-fuels"
-                  checked={selectedFuels.length === Object.keys(fuelTypes).length}
-                  onCheckedChange={(checked) => {
-                    setSelectedFuels(checked ? Object.keys(fuelTypes) : []);
-                  }}
-                />
-                <label htmlFor="select-all-fuels" className="text-sm font-medium">
-                  Selecionar Todos
-                </label>
-              </div>
-              {Object.entries(fuelTypes).map(([key, fuel]) => (
-                <div key={key} className="flex items-center space-x-2">
-                  <Checkbox
-                    id={`fuel-${key}`}
-                    checked={selectedFuels.includes(key)}
-                    onCheckedChange={(checked) => {
-                      setSelectedFuels(prev =>
-                        checked
-                          ? [...prev, key]
-                          : prev.filter(k => k !== key)
-                      );
-                    }}
-                  />
-                  <label htmlFor={`fuel-${key}`} className="text-sm">
-                    {fuel.name}
-                  </label>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Seletores de Período */}
-        <div className="flex items-center gap-4 pt-4 border-t">
-          <div className="flex items-center gap-2">
-            <Calendar className="w-4 h-4 text-muted-foreground" />
-            <Label className="text-sm">Período Combustível:</Label>
-            <Select value={fuelPeriod} onValueChange={setFuelPeriod}>
-              <SelectTrigger className="w-[140px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="weekly">Semanal (7d)</SelectItem>
-                <SelectItem value="monthly">Mensal (30d)</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          
-          <div className="flex items-center gap-2">
-            <Calendar className="w-4 h-4 text-muted-foreground" />
-            <Label className="text-sm">Período Petróleo:</Label>
-            <Select value={oilPeriod} onValueChange={setOilPeriod}>
-              <SelectTrigger className="w-[140px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="weekly">Semanal (7d)</SelectItem>
-                <SelectItem value="monthly">Mensal (30d)</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      </div>
-      )}
-      <div className="grid lg:grid-cols-2 gap-6">
+      <div className="flex items-center gap-3">
+        <LineChartIcon className="w-8 h-8 text-primary" />
         <div>
-          {renderChart(
-              `Preços de Combustível por Fornecedor${selectedBase !== 'all' ? ` - ${baseCities.find(b => b.id === selectedBase)?.name || ''}` : ' - Todas as Bases'}`,
-              <Fuel className="w-6 h-6 text-primary" />,
-              fuelPriceChartData,
-              fuelLineNames,
-              'BRL',
-              { title: 'Nenhum dado de combustível encontrado.', subtitle: 'Verifique se há preços inseridos para os filtros selecionados.' }
-          )}
-        </div>
-        <div>
-            {renderChart(
-              'Preços do Petróleo Internacional',
-              <TrendingUp className="w-6 h-6 text-primary" />,
-              oilPriceChartData,
-              oilLineNames,
-              'USD',
-              { title: 'Nenhum dado de petróleo encontrado.', subtitle: 'Os dados do petróleo são salvos diariamente.' }
-            )}
+          <h1 className="text-3xl font-bold text-foreground">Análise Histórica</h1>
+          <p className="text-muted-foreground">Evolução de preços - Compare fornecedores e combustíveis</p>
         </div>
       </div>
 
+      <div className="space-y-6">
+        {renderChart(
+          fuelChartTitle,
+          <Fuel className="w-6 h-6 text-primary" />,
+          fuelPriceChartData,
+          fuelLineNames,
+          'BRL',
+          { title: 'Nenhum dado de combustível encontrado.', subtitle: 'Verifique se há preços inseridos para os filtros selecionados.' },
+          fuelFilters
+        )}
+
+        {renderVariationRankingChart(
+          variationChartTitle,
+          variationFilters
+        )}
+
+        {renderChart(
+          'Preços do Petróleo Internacional',
+          <TrendingUp className="w-6 h-6 text-primary" />,
+          oilPriceChartData,
+          oilLineNames,
+          'USD',
+          { title: 'Nenhum dado de petróleo encontrado.', subtitle: 'Os dados do petróleo são salvos diariamente.' },
+          oilFilters
+        )}
+      </div>
     </motion.div>
   );
-};
+}
 
 export default Analysis;

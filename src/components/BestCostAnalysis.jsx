@@ -33,12 +33,6 @@ const BestCostAnalysis = ({
       ? [selectedDestination]
       : postos.filter(p => (p.group_ids || []).includes(selectedGroup));
 
-    console.log('🏆 BestCostAnalysis:', {
-      selectedDestination: selectedDestination?.name,
-      groupPostos: groupPostos.map(p => p.name),
-      postoCount: groupPostos.length
-    });
-
     if (groupPostos.length === 0) return null;
 
     // Para cada base, calcular os custos médios

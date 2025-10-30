@@ -139,10 +139,19 @@ const Dashboard = () => {
                 const day = String(now.getDate()).padStart(2, '0');
                 const today = `${year}-${month}-${day}`;
 
-                const formatChangePercent = (current, previous) => {
-                    if (typeof current !== 'number' || typeof previous !== 'number' || previous === 0) {
+                const parseToNumber = (value) => {
+                    const parsed = Number(value);
+                    return Number.isFinite(parsed) ? parsed : null;
+                };
+
+                const formatChangePercent = (currentValue, previousValue) => {
+                    const current = parseToNumber(currentValue);
+                    const previous = parseToNumber(previousValue);
+
+                    if (current === null || previous === null || previous === 0) {
                         return '+0.00%';
                     }
+
                     const diff = ((current - previous) / previous) * 100;
                     const sign = diff >= 0 ? '+' : '';
                     return `${sign}${diff.toFixed(2)}%`;
@@ -160,19 +169,27 @@ const Dashboard = () => {
                 }
 
                 const previousEntry = previousRows?.[0] || null;
-                const wtiCurrent = data.data.WTI?.price ?? null;
-                const brentCurrent = data.data.BRENT?.price ?? null;
-                const wtiChange = previousEntry?.wti_price != null
-                    ? formatChangePercent(wtiCurrent, previousEntry.wti_price)
+
+                const previousWti = previousEntry?.wti_price != null ? parseToNumber(previousEntry.wti_price) : null;
+                const previousBrent = previousEntry?.brent_price != null ? parseToNumber(previousEntry.brent_price) : null;
+
+                const wtiCurrent = parseToNumber(data.data.WTI?.price);
+                const brentCurrent = parseToNumber(data.data.BRENT?.price);
+
+                const wtiPriceForPersistence = wtiCurrent ?? previousWti ?? null;
+                const brentPriceForPersistence = brentCurrent ?? previousBrent ?? null;
+
+                const wtiChange = previousWti != null && wtiPriceForPersistence != null
+                    ? formatChangePercent(wtiPriceForPersistence, previousWti)
                     : '+0.00%';
-                const brentChange = previousEntry?.brent_price != null
-                    ? formatChangePercent(brentCurrent, previousEntry.brent_price)
+                const brentChange = previousBrent != null && brentPriceForPersistence != null
+                    ? formatChangePercent(brentPriceForPersistence, previousBrent)
                     : '+0.00%';
 
                 const { error: upsertError } = await supabase.from('oil_prices').upsert({
                     date: today,
-                    wti_price: data.data.WTI?.price || null,
-                    brent_price: data.data.BRENT?.price || null,
+                    wti_price: wtiPriceForPersistence,
+                    brent_price: brentPriceForPersistence,
                     wti_change: wtiChange,
                     brent_change: brentChange,
                     timestamp: new Date().toISOString()
@@ -187,14 +204,14 @@ const Dashboard = () => {
 
                 console.log('💾 Preço de petróleo persistido no banco:', {
                     date: today,
-                    wti: data.data.WTI?.price ?? null,
-                    brent: data.data.BRENT?.price ?? null
+                    wti: wtiPriceForPersistence,
+                    brent: brentPriceForPersistence,
                 });
 
                 const adjustedOilData = {
                     ...(data.data || {}),
-                    WTI: data.data.WTI ? { ...data.data.WTI, change: wtiChange } : undefined,
-                    BRENT: data.data.BRENT ? { ...data.data.BRENT, change: brentChange } : undefined,
+                    WTI: data.data.WTI ? { ...data.data.WTI, price: wtiPriceForPersistence, change: wtiChange } : undefined,
+                    BRENT: data.data.BRENT ? { ...data.data.BRENT, price: brentPriceForPersistence, change: brentChange } : undefined,
                 };
 
                 setOilPrice(adjustedOilData);

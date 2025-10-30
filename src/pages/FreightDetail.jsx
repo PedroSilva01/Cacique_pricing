@@ -10,9 +10,14 @@ import {
   ChevronDown,
   FileDown,
   FileSpreadsheet,
+  ChevronsUpDown,
+  Check,
+  Search,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/lib/customSupabaseClient';
@@ -136,8 +141,10 @@ const FreightDetail = () => {
   const [cities, setCities] = useState([]);
   const [freightRoutes, setFreightRoutes] = useState([]);
   const [settings, setSettings] = useState(defaultSettings);
-  const [selectedDestination, setSelectedDestination] = useState('all');
+  const [selectedDestinations, setSelectedDestinations] = useState([]);
+  const [includeAllDestinations, setIncludeAllDestinations] = useState(true);
   const [selectedVehicle, setSelectedVehicle] = useState('');
+  const [destinationSearch, setDestinationSearch] = useState('');
   const [exportingPdf, setExportingPdf] = useState(false);
   const [exportingExcel, setExportingExcel] = useState(false);
 
@@ -190,12 +197,15 @@ const FreightDetail = () => {
   const vehicleOptions = useMemo(() => Object.entries(settings.vehicleTypes || {}), [settings.vehicleTypes]);
 
   const destinationsOptions = useMemo(
-    () => [
-      { id: 'all', name: 'Todas as cidades' },
-      ...cities.map((city) => ({ id: city.id, name: city.name })),
-    ],
+    () => cities.map((city) => ({ id: String(city.id), name: city.name })),
     [cities],
   );
+
+  const filteredDestinationOptions = useMemo(() => {
+    const term = destinationSearch.trim().toLowerCase();
+    if (!term) return destinationsOptions;
+    return destinationsOptions.filter((option) => option.name.toLowerCase().includes(term));
+  }, [destinationSearch, destinationsOptions]);
 
   const filteredRoutesByBase = useMemo(() => {
     if (!freightRoutes.length || !selectedVehicle) return [];
@@ -204,7 +214,12 @@ const FreightDetail = () => {
 
     freightRoutes.forEach((route) => {
       if (!route.origin) return;
-      if (selectedDestination !== 'all' && route.destination_city_id !== selectedDestination) return;
+      const normalizedDestinationId = String(route.destination_city_id);
+      const shouldFilterDestinations = !includeAllDestinations;
+      if (shouldFilterDestinations) {
+        if (selectedDestinations.length === 0) return;
+        if (!selectedDestinations.includes(normalizedDestinationId)) return;
+      }
 
       const vehicleData = settings.vehicleTypes?.[selectedVehicle];
       const costPerLiter = route.costs?.[selectedVehicle] ?? null;
@@ -232,7 +247,7 @@ const FreightDetail = () => {
     });
 
     return Array.from(grouped.values()).filter((entry) => entry.routes.length > 0);
-  }, [freightRoutes, selectedDestination, selectedVehicle, settings.vehicleTypes]);
+  }, [freightRoutes, selectedDestinations, includeAllDestinations, selectedVehicle, settings.vehicleTypes]);
 
   const preparedRows = useMemo(
     () =>
@@ -275,15 +290,28 @@ const FreightDetail = () => {
     };
   }, [preparedRows, totalRoutes]);
 
-  const selectedDestinationLabel = useMemo(() => {
-    if (selectedDestination === 'all') return 'Todas as cidades';
-    return destinationsOptions.find((c) => c.id === selectedDestination)?.name || 'Cidade desconhecida';
-  }, [selectedDestination, destinationsOptions]);
+  const selectedDestinationsLabels = useMemo(() => {
+    if (includeAllDestinations) return ['Todas as cidades'];
+    if (selectedDestinations.length === 0) return ['Nenhuma cidade selecionada'];
+    return selectedDestinations
+      .map((id) => destinationsOptions.find((c) => c.id === id)?.name || 'Cidade desconhecida')
+      .filter(Boolean);
+  }, [includeAllDestinations, selectedDestinations, destinationsOptions]);
 
   const selectedVehicleLabel = useMemo(() => {
     if (!selectedVehicle) return '—';
     return settings.vehicleTypes?.[selectedVehicle]?.name || selectedVehicle;
   }, [selectedVehicle, settings.vehicleTypes]);
+
+  const handleDestinationToggle = useCallback((cityId, checked) => {
+    setSelectedDestinations((prev) => {
+      if (checked) {
+        if (prev.includes(cityId)) return prev;
+        return [...prev, cityId];
+      }
+      return prev.filter((id) => id !== cityId);
+    });
+  }, []);
 
   const handleExportPdf = useCallback(async () => {
     if (!preparedRows.length) {
@@ -298,7 +326,7 @@ const FreightDetail = () => {
       doc.setFontSize(14);
       doc.text('Detalhamento de Frete', 14, 16);
       doc.setFontSize(10);
-      doc.text(`Destino: ${selectedDestinationLabel}`, 14, 24);
+      doc.text(`Destino(s): ${selectedDestinationsLabels.join(', ')}`, 14, 24);
       doc.text(`Veículo: ${selectedVehicleLabel}`, 14, 30);
       doc.text(`Rotas exportadas: ${totalRoutes}`, 14, 36);
 
@@ -346,7 +374,7 @@ const FreightDetail = () => {
     } finally {
       setExportingPdf(false);
     }
-  }, [preparedRows, selectedDestinationLabel, selectedVehicleLabel, toast, totalRoutes]);
+  }, [preparedRows, selectedDestinationsLabels, selectedVehicleLabel, toast, totalRoutes]);
 
   const handleExportExcel = useCallback(async () => {
     if (!preparedRows.length) {
@@ -375,7 +403,7 @@ const FreightDetail = () => {
       ];
 
       sheet.addRow([]);
-      sheet.addRow([`Destino: ${selectedDestinationLabel}`]);
+      sheet.addRow([`Destino(s): ${selectedDestinationsLabels.join(', ')}`]);
       sheet.addRow([`Veículo: ${selectedVehicleLabel}`]);
       sheet.addRow([`Rotas exportadas: ${totalRoutes}`]);
       sheet.addRow([]);
@@ -434,7 +462,7 @@ const FreightDetail = () => {
     } finally {
       setExportingExcel(false);
     }
-  }, [preparedRows, selectedDestinationLabel, selectedVehicleLabel, toast, totalRoutes]);
+  }, [preparedRows, selectedDestinationsLabels, selectedVehicleLabel, toast, totalRoutes]);
 
   if (loading) {
     return (
@@ -458,19 +486,82 @@ const FreightDetail = () => {
       <Card className="border border-muted/40 bg-card/80">
         <CardContent className="grid gap-4 py-6 md:grid-cols-4">
           <div className="md:col-span-2 space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Cidade de destino</p>
-            <Select value={selectedDestination} onValueChange={setSelectedDestination}>
-              <SelectTrigger className="bg-background">
-                <SelectValue placeholder="Selecione a cidade" />
-              </SelectTrigger>
-              <SelectContent>
-                {destinationsOptions.map((city) => (
-                  <SelectItem key={city.id} value={city.id}>
-                    {city.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Cidades de destino</p>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  className="w-full justify-between bg-background"
+                >
+                  <span className="truncate text-left">
+                    {includeAllDestinations
+                      ? 'Todas as cidades'
+                      : selectedDestinations.length > 0
+                        ? `${selectedDestinations.length} cidade(s) selecionada(s)`
+                        : 'Selecione as cidades'}
+                  </span>
+                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[320px] p-4" align="start" sideOffset={6}>
+                <div className="flex items-center gap-2 rounded-md border bg-background px-2 py-1.5">
+                  <Search className="w-4 h-4 text-muted-foreground" />
+                  <input
+                    className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                    value={destinationSearch}
+                    onChange={(event) => setDestinationSearch(event.target.value)}
+                  />
+                </div>
+                <div className="mt-3 max-h-60 overflow-y-auto space-y-1">
+                  <label
+                    className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${
+                      includeAllDestinations ? 'bg-primary/10' : 'hover:bg-muted'
+                    }`}
+                  >
+                    <Checkbox
+                      checked={includeAllDestinations}
+                      onCheckedChange={(checked) => {
+                        if (checked === true) {
+                          setIncludeAllDestinations(true);
+                          setSelectedDestinations([]);
+                        } else {
+                          setIncludeAllDestinations(false);
+                        }
+                      }}
+                    />
+                    <span className="flex-1 text-left">Selecionar todas</span>
+                  </label>
+                  <div className="border-t border-muted/50 pt-2 space-y-1">
+                    {filteredDestinationOptions.length === 0 ? (
+                      <p className="text-xs text-muted-foreground py-6 text-center">Nenhuma cidade encontrada.</p>
+                    ) : (
+                      filteredDestinationOptions.map((city) => {
+                        const isSelected = selectedDestinations.includes(city.id);
+                        return (
+                          <label
+                            key={city.id}
+                            className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${
+                            !includeAllDestinations && isSelected ? 'bg-primary/10' : 'hover:bg-muted'
+                          } ${includeAllDestinations ? 'opacity-60' : ''}`}
+                          >
+                            <Checkbox
+                              checked={includeAllDestinations ? true : isSelected}
+                              disabled={includeAllDestinations}
+                              onCheckedChange={(checked) => {
+                                setIncludeAllDestinations(false);
+                                handleDestinationToggle(city.id, checked === true);
+                              }}
+                            />
+                            <span className="flex-1 text-left">{city.name}</span>
+                          </label>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
 
           <div className="space-y-2">
@@ -496,7 +587,8 @@ const FreightDetail = () => {
                 variant="outline"
                 className="w-full md:w-auto justify-center md:justify-start"
                 onClick={() => {
-                  setSelectedDestination('all');
+                  setSelectedDestinations([]);
+                  setIncludeAllDestinations(true);
                   if (vehicleOptions.length) {
                     setSelectedVehicle(vehicleOptions[0][0]);
                   }

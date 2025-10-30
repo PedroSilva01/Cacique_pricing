@@ -4,11 +4,10 @@ import { motion } from 'framer-motion';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, Cell, ReferenceLine } from 'recharts';
 import { supabase } from '@/lib/customSupabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
-import { RefreshCw, AlertTriangle, LineChart as LineChartIcon, Fuel, TrendingUp } from 'lucide-react';
+import { RefreshCw, AlertTriangle, LineChart as LineChartIcon, Fuel, TrendingUp, Calendar, MapPin, Users, Layers } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Calendar } from 'lucide-react';
 import { defaultSettings } from '@/lib/mockData';
 
 const COLORS = ['#3b82f6', '#10b981', '#ef4444', '#f97316', '#8b5cf6', '#ec4899', '#64748b', '#f59e0b', '#34d399', '#a78bfa'];
@@ -42,6 +41,7 @@ const Analysis = () => {
   const [dbData, setDbData] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [baseCities, setBaseCities] = useState([]);
+  const [groups, setGroups] = useState([]);
   const [settings, setSettings] = useState(defaultSettings);
   const [oilPrices, setOilPrices] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -51,11 +51,13 @@ const Analysis = () => {
   const [fuelBase, setFuelBase] = useState('all');
   const [fuelSuppliers, setFuelSuppliers] = useState([]);
   const [fuelFuels, setFuelFuels] = useState([]);
+  const [fuelGroups, setFuelGroups] = useState([]);
 
   const [variationBase, setVariationBase] = useState('all');
   const [variationSuppliers, setVariationSuppliers] = useState([]);
   const [variationFuels, setVariationFuels] = useState([]);
   const [variationPeriod, setVariationPeriod] = useState('monthly');
+  const [variationGroups, setVariationGroups] = useState([]);
 
   const [fuelPeriod, setFuelPeriod] = useState('monthly');
   const [oilPeriod, setOilPeriod] = useState('monthly');
@@ -77,6 +79,11 @@ const Analysis = () => {
     [fuelTypes]
   );
 
+  const groupOptions = useMemo(
+    () => groups.map((group) => ({ id: String(group.id), name: group.name })),
+    [groups]
+  );
+
   const fetchFuelData = useCallback(async () => {
     if (!user) return;
     setLoading(true);
@@ -91,23 +98,26 @@ const Analysis = () => {
     const fromDate = startDate.toISOString().split('T')[0];
 
     try {
-      const [pricesRes, suppliersRes, baseCitiesRes, settingsRes] = await Promise.all([
-        supabase.from('daily_prices').select('date, supplier_id, base_city_id, prices').eq('user_id', user.id).gte('date', fromDate),
+      const [pricesRes, suppliersRes, baseCitiesRes, settingsRes, groupsRes] = await Promise.all([
+        supabase.from('daily_prices').select('date, supplier_id, base_city_id, group_ids, prices').eq('user_id', user.id).gte('date', fromDate),
         supabase.from('suppliers').select('id, name, city_ids').eq('user_id', user.id),
         supabase.from('base_cities').select('id, name').eq('user_id', user.id).order('name'),
         supabase.from('user_settings').select('settings').eq('user_id', user.id).maybeSingle(),
+        supabase.from('groups').select('id, name').eq('user_id', user.id).order('name'),
       ]);
 
       if (pricesRes.error) throw pricesRes.error;
       if (suppliersRes.error) throw suppliersRes.error;
       if (baseCitiesRes.error) throw baseCitiesRes.error;
       if (settingsRes.error && settingsRes.error.code !== 'PGRST116') throw settingsRes.error;
+      if (groupsRes.error && groupsRes.error.code !== 'PGRST116') throw groupsRes.error;
 
       const userSettings = settingsRes.data?.settings || defaultSettings;
       const currentFuelTypes = userSettings.fuelTypes || {};
       const availableFuelKeys = Object.keys(currentFuelTypes);
       const supplierIds = (suppliersRes.data || []).map(s => String(s.id));
       const baseIds = (baseCitiesRes.data || []).map(b => String(b.id));
+      const groupIds = (groupsRes.data || []).map(g => String(g.id));
 
       setFuelFuels(prev => {
         const filtered = prev.filter(key => availableFuelKeys.includes(key));
@@ -145,9 +155,22 @@ const Analysis = () => {
         return 'all';
       });
 
+      setFuelGroups(prev => {
+        const filtered = prev.filter(id => groupIds.includes(id));
+        if (filtered.length > 0) return filtered;
+        return groupIds;
+      });
+
+      setVariationGroups(prev => {
+        const filtered = prev.filter(id => groupIds.includes(id));
+        if (filtered.length > 0) return filtered;
+        return groupIds;
+      });
+
       setSuppliers((suppliersRes.data || []).map((supplier) => ({ ...supplier, id: String(supplier.id) })));
 
       setBaseCities((baseCitiesRes.data || []).map((base) => ({ ...base, id: String(base.id) })));
+      setGroups((groupsRes.data || []).map((group) => ({ ...group, id: String(group.id) })));
       setSettings(userSettings);
 
       // Flatten all prices for selected fuels and suppliers
@@ -160,6 +183,7 @@ const Analysis = () => {
                 date: priceRecord.date,
                 supplier_id: String(priceRecord.supplier_id),
                 base_city_id: priceRecord.base_city_id != null ? String(priceRecord.base_city_id) : null,
+                group_ids: Array.isArray(priceRecord.group_ids) ? priceRecord.group_ids.map((id) => String(id)) : [],
                 fuel_type: fuelKey,
                 price: priceRecord.prices[fuelKey]
               });
@@ -212,23 +236,31 @@ const Analysis = () => {
     }
   }, [user, fetchOilData]);
 
+  const matchesGroupSelection = (itemGroups = [], selectedGroups = []) => {
+    if (selectedGroups.length === 0) return true;
+    if (!itemGroups || itemGroups.length === 0) return false;
+    return itemGroups.some((groupId) => selectedGroups.includes(groupId));
+  };
+
   const filteredFuelData = useMemo(() => {
     return dbData.filter(item => {
       const matchesBase = fuelBase === 'all' || item.base_city_id === fuelBase;
       const matchesSupplier = fuelSuppliers.length === 0 || fuelSuppliers.includes(item.supplier_id);
       const matchesFuel = fuelFuels.length === 0 || fuelFuels.includes(item.fuel_type);
-      return matchesBase && matchesSupplier && matchesFuel;
+      const matchesGroup = matchesGroupSelection(item.group_ids, fuelGroups);
+      return matchesBase && matchesSupplier && matchesFuel && matchesGroup;
     });
-  }, [dbData, fuelBase, fuelSuppliers, fuelFuels]);
+  }, [dbData, fuelBase, fuelSuppliers, fuelFuels, fuelGroups]);
 
   const filteredVariationData = useMemo(() => {
     return dbData.filter(item => {
       const matchesBase = variationBase === 'all' || item.base_city_id === variationBase;
       const matchesSupplier = variationSuppliers.length === 0 || variationSuppliers.includes(item.supplier_id);
       const matchesFuel = variationFuels.length === 0 || variationFuels.includes(item.fuel_type);
-      return matchesBase && matchesSupplier && matchesFuel;
+      const matchesGroup = matchesGroupSelection(item.group_ids, variationGroups);
+      return matchesBase && matchesSupplier && matchesFuel && matchesGroup;
     });
-  }, [dbData, variationBase, variationSuppliers, variationFuels]);
+  }, [dbData, variationBase, variationSuppliers, variationFuels, variationGroups]);
 
   const fuelPriceChartData = useMemo(() => {
       if (!filteredFuelData.length || !suppliers.length || fuelFuels.length === 0 || fuelSuppliers.length === 0) return [];
@@ -447,10 +479,11 @@ const Analysis = () => {
           </ResponsiveContainer>
         )}
         {!loading && !error && data.length === 0 && (
-            <div className="flex flex-col justify-center items-center h-full text-muted-foreground">
-                <LineChartIcon className="w-12 h-12 mb-4" />
+            <div className="flex flex-col justify-center items-center h-full text-muted-foreground space-y-2">
+                <LineChartIcon className="w-12 h-12 mb-2" />
                 <p className="font-semibold">{noDataMessage.title}</p>
-                <p className="text-sm">{noDataMessage.subtitle}</p>
+                <p className="text-sm text-center">{noDataMessage.subtitle}</p>
+                <p className="text-xs text-center text-muted-foreground/80">Verifique se os grupos selecionados possuem preços registrados no período.</p>
             </div>
         )}
       </div>
@@ -467,160 +500,303 @@ const Analysis = () => {
     : 'Ranking de Variação de Preços';
 
   const buildSupplierCheckboxes = (options, selected, setSelected, idPrefix) => (
-    <div className="space-y-2 max-h-[200px] overflow-y-auto border rounded p-3">
-      <div className="flex items-center space-x-2 mb-2">
-        <Checkbox
-          id={`${idPrefix}-suppliers-all`}
-          checked={options.length > 0 && selected.length === options.length}
-          onCheckedChange={(checked) => {
-            if (checked === true) {
-              setSelected(options.map((opt) => opt.id));
-            } else {
-              setSelected([]);
-            }
-          }}
-        />
-        <label htmlFor={`${idPrefix}-suppliers-all`} className="text-sm font-medium">
-          Selecionar Todos
-        </label>
-      </div>
-      {options.map((option) => (
-        <div key={option.id} className="flex items-center space-x-2">
+    <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
+      <div className="flex items-center justify-between gap-2 rounded-md border border-dashed border-muted px-3 py-2">
+        <div className="flex items-center gap-2">
           <Checkbox
-            id={`${idPrefix}-supplier-${option.id}`}
-            checked={selected.includes(option.id)}
+            id={`${idPrefix}-suppliers-all`}
+            checked={options.length > 0 && selected.length === options.length}
+            disabled={options.length === 0}
             onCheckedChange={(checked) => {
-              setSelected((prev) => {
-                if (checked === true) {
-                  if (prev.includes(option.id)) return prev;
-                  return [...prev, option.id];
-                }
-                return prev.filter((id) => id !== option.id);
-              });
+              if (options.length === 0) return;
+              if (checked === true) {
+                setSelected(options.map((opt) => opt.id));
+              } else {
+                setSelected([]);
+              }
             }}
           />
-          <label htmlFor={`${idPrefix}-supplier-${option.id}`} className="text-sm">
-            {option.name}
+          <label htmlFor={`${idPrefix}-suppliers-all`} className="text-xs font-medium uppercase tracking-wide">
+            Selecionar todos
           </label>
         </div>
-      ))}
+        <span className="text-[10px] text-muted-foreground">{selected.length}/{options.length}</span>
+      </div>
+      {options.length === 0 ? (
+        <p className="text-xs text-muted-foreground text-center py-6">Nenhum fornecedor cadastrado.</p>
+      ) : (
+        options.map((option) => (
+          <div key={option.id} className="flex items-center gap-2 rounded-md px-2 py-1 hover:bg-muted/60">
+            <Checkbox
+              id={`${idPrefix}-supplier-${option.id}`}
+              checked={selected.includes(option.id)}
+              onCheckedChange={(checked) => {
+                setSelected((prev) => {
+                  if (checked === true) {
+                    if (prev.includes(option.id)) return prev;
+                    return [...prev, option.id];
+                  }
+                  return prev.filter((id) => id !== option.id);
+                });
+              }}
+            />
+            <label htmlFor={`${idPrefix}-supplier-${option.id}`} className="text-sm">
+              {option.name}
+            </label>
+          </div>
+        ))
+      )}
     </div>
   );
 
   const buildFuelCheckboxes = (options, selected, setSelected, idPrefix) => (
-    <div className="space-y-2 max-h-[200px] overflow-y-auto border rounded p-3">
-      <div className="flex items-center space-x-2 mb-2">
-        <Checkbox
-          id={`${idPrefix}-fuels-all`}
-          checked={options.length > 0 && selected.length === options.length}
-          onCheckedChange={(checked) => {
-            if (checked === true) {
-              setSelected(options.map((opt) => opt.id));
-            } else {
-              setSelected([]);
-            }
-          }}
-        />
-        <label htmlFor={`${idPrefix}-fuels-all`} className="text-sm font-medium">
-          Selecionar Todos
-        </label>
-      </div>
-      {options.map((option) => (
-        <div key={option.id} className="flex items-center space-x-2">
+    <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
+      <div className="flex items-center justify-between gap-2 rounded-md border border-dashed border-muted px-3 py-2">
+        <div className="flex items-center gap-2">
           <Checkbox
-            id={`${idPrefix}-fuel-${option.id}`}
-            checked={selected.includes(option.id)}
+            id={`${idPrefix}-fuels-all`}
+            checked={options.length > 0 && selected.length === options.length}
+            disabled={options.length === 0}
             onCheckedChange={(checked) => {
-              setSelected((prev) => {
-                if (checked === true) {
-                  if (prev.includes(option.id)) return prev;
-                  return [...prev, option.id];
-                }
-                return prev.filter((id) => id !== option.id);
-              });
+              if (options.length === 0) return;
+              if (checked === true) {
+                setSelected(options.map((opt) => opt.id));
+              } else {
+                setSelected([]);
+              }
             }}
           />
-          <label htmlFor={`${idPrefix}-fuel-${option.id}`} className="text-sm">
-            {option.name}
+          <label htmlFor={`${idPrefix}-fuels-all`} className="text-xs font-medium uppercase tracking-wide">
+            Selecionar todos
           </label>
         </div>
-      ))}
+        <span className="text-[10px] text-muted-foreground">{selected.length}/{options.length}</span>
+      </div>
+      {options.length === 0 ? (
+        <p className="text-xs text-muted-foreground text-center py-6">Nenhum combustível disponível.</p>
+      ) : (
+        options.map((option) => (
+          <div key={option.id} className="flex items-center gap-2 rounded-md px-2 py-1 hover:bg-muted/60">
+            <Checkbox
+              id={`${idPrefix}-fuel-${option.id}`}
+              checked={selected.includes(option.id)}
+              onCheckedChange={(checked) => {
+                setSelected((prev) => {
+                  if (checked === true) {
+                    if (prev.includes(option.id)) return prev;
+                    return [...prev, option.id];
+                  }
+                  return prev.filter((id) => id !== option.id);
+                });
+              }}
+            />
+            <label htmlFor={`${idPrefix}-fuel-${option.id}`} className="text-sm">
+              {option.name}
+            </label>
+          </div>
+        ))
+      )}
+    </div>
+  );
+
+  const buildGroupCheckboxes = (options, selected, setSelected, idPrefix) => (
+    <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
+      <div className="flex items-center justify-between gap-2 rounded-md border border-dashed border-muted px-3 py-2">
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id={`${idPrefix}-groups-all`}
+            checked={options.length > 0 && selected.length === options.length}
+            disabled={options.length === 0}
+            onCheckedChange={(checked) => {
+              if (options.length === 0) return;
+              if (checked === true) {
+                setSelected(options.map((opt) => opt.id));
+              } else {
+                setSelected([]);
+              }
+            }}
+          />
+          <label htmlFor={`${idPrefix}-groups-all`} className="text-xs font-medium uppercase tracking-wide">
+            Selecionar todos
+          </label>
+        </div>
+        <span className="text-[10px] text-muted-foreground">{selected.length}/{options.length}</span>
+      </div>
+      {options.length === 0 ? (
+        <p className="text-xs text-muted-foreground text-center py-6">Nenhum grupo encontrado.</p>
+      ) : (
+        options.map((option) => (
+          <div key={option.id} className="flex items-center gap-2 rounded-md px-2 py-1 hover:bg-muted/60">
+            <Checkbox
+              id={`${idPrefix}-group-${option.id}`}
+              checked={selected.includes(option.id)}
+              onCheckedChange={(checked) => {
+                setSelected((prev) => {
+                  if (checked === true) {
+                    if (prev.includes(option.id)) return prev;
+                    return [...prev, option.id];
+                  }
+                  return prev.filter((id) => id !== option.id);
+                });
+              }}
+            />
+            <label htmlFor={`${idPrefix}-group-${option.id}`} className="text-sm">
+              {option.name}
+            </label>
+          </div>
+        ))
+      )}
+    </div>
+  );
+
+  const FilterCard = ({ icon: Icon, title, description, children, className = '' }) => (
+    <div className={`rounded-xl border border-muted bg-card/60 shadow-sm p-4 space-y-4 ${className}`}>
+      <div className="flex items-start gap-3">
+        <div className="rounded-md bg-primary/10 p-2">
+          <Icon className="w-4 h-4 text-primary" />
+        </div>
+        <div>
+          <h3 className="font-semibold text-sm text-foreground">{title}</h3>
+          {description ? <p className="text-xs text-muted-foreground mt-1">{description}</p> : null}
+        </div>
+      </div>
+      <div className="space-y-3">
+        {children}
+      </div>
     </div>
   );
 
   const variationFilters = (
-    <div className="grid md:grid-cols-3 gap-4">
-      <div>
-        <Label className="text-sm font-medium mb-3 block">Base de Carregamento</Label>
-        <Select value={variationBase} onValueChange={setVariationBase}>
-          <SelectTrigger>
-            <SelectValue placeholder="Selecione a base..." />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Todas as Bases</SelectItem>
-            {baseOptions.map((option) => (
-              <SelectItem key={option.id} value={option.id}>{option.name}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Label className="text-sm font-medium mb-3 block mt-4">Período</Label>
-        <Select value={variationPeriod} onValueChange={setVariationPeriod}>
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {Object.entries(PERIOD_OPTIONS).map(([key, option]) => (
-              <SelectItem key={key} value={key}>{option.label}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      <div>
-        <Label className="text-sm font-medium mb-3 block">Fornecedores</Label>
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <FilterCard
+        icon={MapPin}
+        title="Escopo da Análise"
+        description="Escolha a base de origem e o período utilizado no ranking."
+        className="min-w-[220px]"
+      >
+        <div className="space-y-2">
+          <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Base de carregamento</Label>
+          <Select value={variationBase} onValueChange={setVariationBase}>
+            <SelectTrigger>
+              <SelectValue placeholder="Selecione a base..." />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todas as Bases</SelectItem>
+              {baseOptions.map((option) => (
+                <SelectItem key={option.id} value={option.id}>{option.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Período</Label>
+          <Select value={variationPeriod} onValueChange={setVariationPeriod}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.entries(PERIOD_OPTIONS).map(([key, option]) => (
+                <SelectItem key={key} value={key}>{option.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </FilterCard>
+
+      <FilterCard
+        icon={Users}
+        title="Fornecedores"
+        description="Selecione quais fornecedores terão suas variações comparadas."
+        className="min-w-[220px]"
+      >
         {buildSupplierCheckboxes(supplierOptions, variationSuppliers, setVariationSuppliers, 'variation')}
-      </div>
-      <div>
-        <Label className="text-sm font-medium mb-3 block">Combustíveis</Label>
+      </FilterCard>
+
+      <FilterCard
+        icon={Fuel}
+        title="Combustíveis"
+        description="Defina os combustíveis considerados no ranking."
+        className="min-w-[220px]"
+      >
         {buildFuelCheckboxes(fuelOptions, variationFuels, setVariationFuels, 'variation')}
-      </div>
+      </FilterCard>
+
+      <FilterCard
+        icon={Layers}
+        title="Grupos de Postos"
+        description="Filtre os grupos que recebem o preço do fornecedor."
+        className="sm:col-span-2 xl:col-span-1 min-w-[220px]"
+      >
+        {buildGroupCheckboxes(groupOptions, variationGroups, setVariationGroups, 'variation')}
+        <p className="text-xs text-muted-foreground">Somente registros vinculados aos grupos selecionados entram no cálculo.</p>
+      </FilterCard>
     </div>
   );
 
   const fuelFilters = (
-    <div className="grid md:grid-cols-3 gap-4">
-      <div>
-        <Label className="text-sm font-medium mb-3 block">Base de Carregamento</Label>
-        <Select value={fuelBase} onValueChange={setFuelBase}>
-          <SelectTrigger>
-            <SelectValue placeholder="Selecione a base..." />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Todas as Bases</SelectItem>
-            {baseOptions.map((option) => (
-              <SelectItem key={option.id} value={option.id}>{option.name}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Label className="text-sm font-medium mb-3 block mt-4">Período</Label>
-        <Select value={fuelPeriod} onValueChange={setFuelPeriod}>
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {Object.entries(PERIOD_OPTIONS).map(([key, option]) => (
-              <SelectItem key={key} value={key}>{option.label}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      <div>
-        <Label className="text-sm font-medium mb-3 block">Fornecedores</Label>
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <FilterCard
+        icon={MapPin}
+        title="Escopo da Série"
+        description="Escolha a base e o período para montar a série histórica do gráfico."
+        className="min-w-[220px]"
+      >
+        <div className="space-y-2">
+          <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Base de carregamento</Label>
+          <Select value={fuelBase} onValueChange={setFuelBase}>
+            <SelectTrigger>
+              <SelectValue placeholder="Selecione a base..." />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todas as Bases</SelectItem>
+              {baseOptions.map((option) => (
+                <SelectItem key={option.id} value={option.id}>{option.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Período</Label>
+          <Select value={fuelPeriod} onValueChange={setFuelPeriod}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.entries(PERIOD_OPTIONS).map(([key, option]) => (
+                <SelectItem key={key} value={key}>{option.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </FilterCard>
+
+      <FilterCard
+        icon={Users}
+        title="Fornecedores"
+        description="Compare a evolução de preço entre diferentes fornecedores."
+        className="min-w-[220px]"
+      >
         {buildSupplierCheckboxes(supplierOptions, fuelSuppliers, setFuelSuppliers, 'fuel')}
-      </div>
-      <div>
-        <Label className="text-sm font-medium mb-3 block">Combustíveis</Label>
+      </FilterCard>
+
+      <FilterCard
+        icon={Fuel}
+        title="Combustíveis"
+        description="Selecione os combustíveis visíveis no gráfico."
+        className="min-w-[220px]"
+      >
         {buildFuelCheckboxes(fuelOptions, fuelFuels, setFuelFuels, 'fuel')}
-      </div>
+      </FilterCard>
+
+      <FilterCard
+        icon={Layers}
+        title="Grupos de Postos"
+        description="Mostre apenas os registros aplicados aos grupos desejados."
+        className="sm:col-span-2 xl:col-span-1 min-w-[220px]"
+      >
+        {buildGroupCheckboxes(groupOptions, fuelGroups, setFuelGroups, 'fuel')}
+        <p className="text-xs text-muted-foreground">Os pontos exibidos consideram exclusivamente os grupos selecionados.</p>
+      </FilterCard>
     </div>
   );
 

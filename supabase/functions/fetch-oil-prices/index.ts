@@ -24,6 +24,51 @@ interface OilPriceData {
   };
 }
 
+interface OilPriceApiEntry {
+  code?: string;
+  price?: number;
+  currency?: string;
+  created_at?: string;
+}
+
+interface OilPriceApiResponse {
+  status?: string;
+  data?: {
+    code?: string;
+    price?: number;
+    currency?: string;
+    created_at?: string;
+    prices?: OilPriceApiEntry[];
+  };
+}
+
+const DEFAULT_WTI_PRICE = 61.47;
+const DEFAULT_BRENT_PRICE = 63.93;
+
+function extractPriceEntry(result: OilPriceApiResponse | null, code: string): OilPriceApiEntry | null {
+  if (!result || result.status !== 'success' || !result.data) {
+    return null;
+  }
+
+  const { data } = result;
+
+  if (Array.isArray(data.prices)) {
+    const entry = data.prices.find((priceItem) => priceItem.code === code);
+    return entry ?? null;
+  }
+
+  if (data.code === code) {
+    return {
+      code: data.code,
+      price: data.price,
+      currency: data.currency,
+      created_at: data.created_at,
+    };
+  }
+
+  return null;
+}
+
 async function fetchOilPrices(apiKey: string): Promise<OilPriceData> {
   try {
     // Fetch WTI price first
@@ -39,7 +84,7 @@ async function fetchOilPrices(apiKey: string): Promise<OilPriceData> {
       throw new Error(`API request failed: ${wtiResponse.status} ${wtiResponse.statusText}`);
     }
 
-    const wtiResult = await wtiResponse.json();
+    const wtiResult: OilPriceApiResponse = await wtiResponse.json();
     console.log('WTI API Response:', JSON.stringify(wtiResult));
     
     // Try to fetch BRENT separately
@@ -52,79 +97,64 @@ async function fetchOilPrices(apiKey: string): Promise<OilPriceData> {
       });
       
       if (brentResponse.ok) {
-        brentResult = await brentResponse.json();
+        brentResult = (await brentResponse.json()) as OilPriceApiResponse;
         console.log('BRENT API Response:', JSON.stringify(brentResult));
       }
-    } catch (brentError) {
+    } catch (_brentError) {
       console.log('BRENT fetch failed, will estimate based on WTI');
     }
     
     const transformedData: OilPriceData = {};
     
     // Handle WTI - API pode retornar array prices OU objeto direto
-    if (wtiResult.status === 'success' && wtiResult.data) {
-      let wtiData;
-      
-      // Caso 1: Array prices (múltiplos códigos)
-      if (wtiResult.data.prices && Array.isArray(wtiResult.data.prices)) {
-        wtiData = wtiResult.data.prices.find((p: any) => p.code === 'WTI_USD');
-      }
-      // Caso 2: Objeto direto (código individual)
-      else if (wtiResult.data.code === 'WTI_USD') {
-        wtiData = wtiResult.data;
-      }
-      
-      if (wtiData && wtiData.price) {
-        transformedData.WTI = {
-          price: wtiData.price,
-          change: '+0.00%',
-          currency: wtiData.currency || 'USD',
-          unit: 'barrel',
-          timestamp: wtiData.created_at || new Date().toISOString()
-        };
-        
-        console.log('WTI parsed successfully:', wtiData.price);
-        
-        // If BRENT not available, estimate it (historically BRENT is ~3-5% higher than WTI)
-        if (!brentResult || !brentResult.data) {
-          const brentEstimated = wtiData.price * 1.04; // 4% premium typical
-          transformedData.BRENT = {
-            price: parseFloat(brentEstimated.toFixed(2)),
-            change: '+0.00%',
-            currency: 'USD',
-            unit: 'barrel',
-            timestamp: wtiData.created_at || new Date().toISOString()
-          };
-          console.log('BRENT estimated based on WTI:', brentEstimated);
-        }
-      }
+    const wtiData = extractPriceEntry(wtiResult, 'WTI_USD');
+
+    if (wtiData?.price && typeof wtiData.price === 'number') {
+      transformedData.WTI = {
+        price: wtiData.price,
+        change: '+0.00%',
+        currency: wtiData.currency ?? 'USD',
+        unit: 'barrel',
+        timestamp: wtiData.created_at ?? new Date().toISOString(),
+      };
+
+      console.log('WTI parsed successfully:', wtiData.price);
+    } else {
+      transformedData.WTI = {
+        price: DEFAULT_WTI_PRICE,
+        change: '+0.00%',
+        currency: 'USD',
+        unit: 'barrel',
+        timestamp: new Date().toISOString(),
+      };
+      console.log('WTI fallback applied');
     }
-    
-    // Handle BRENT if we got actual data
-    if (brentResult && brentResult.status === 'success' && brentResult.data) {
-      let brentData;
-      
-      // Caso 1: Array prices
-      if (brentResult.data.prices && Array.isArray(brentResult.data.prices)) {
-        brentData = brentResult.data.prices.find((p: any) => p.code === 'BRENT_USD');
-      }
-      // Caso 2: Objeto direto
-      else if (brentResult.data.code === 'BRENT_USD') {
-        brentData = brentResult.data;
-      }
-      
-      if (brentData && brentData.price) {
-        transformedData.BRENT = {
-          price: brentData.price,
-          change: '+0.00%',
-          currency: brentData.currency || 'USD',
-          unit: 'barrel',
-          timestamp: brentData.created_at || new Date().toISOString()
-        };
-        console.log('BRENT parsed successfully:', brentData.price);
-      }
+
+    // Handle BRENT if we got actual data; otherwise, derive from WTI
+    const brentData = extractPriceEntry(brentResult, 'BRENT_USD');
+
+    if (brentData?.price && typeof brentData.price === 'number') {
+      transformedData.BRENT = {
+        price: brentData.price,
+        change: '+0.00%',
+        currency: brentData.currency ?? 'USD',
+        unit: 'barrel',
+        timestamp: brentData.created_at ?? new Date().toISOString(),
+      };
+      console.log('BRENT parsed successfully:', brentData.price);
+    } else {
+      const referencePrice = transformedData.WTI?.price ?? DEFAULT_WTI_PRICE;
+      const estimatedBrent = referencePrice * 1.045; // small premium over WTI
+      transformedData.BRENT = {
+        price: parseFloat(estimatedBrent.toFixed(2)) || DEFAULT_BRENT_PRICE,
+        change: '+0.00%',
+        currency: 'USD',
+        unit: 'barrel',
+        timestamp: transformedData.WTI?.timestamp ?? new Date().toISOString(),
+      };
+      console.log('BRENT fallback/estimate applied:', transformedData.BRENT.price);
     }
-    
+
     return transformedData;
   } catch (error) {
     console.error('Error fetching oil prices from API:', error);

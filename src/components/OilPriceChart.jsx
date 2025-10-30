@@ -1,10 +1,22 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+} from 'recharts';
 import { supabase } from '@/lib/customSupabaseClient';
 import { RefreshCw, TrendingUp, DollarSign } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Checkbox } from '@/components/ui/checkbox';
 
 const CustomTooltip = ({ active, payload, label }) => {
   if (active && payload && payload.length) {
@@ -22,12 +34,62 @@ const CustomTooltip = ({ active, payload, label }) => {
   return null;
 };
 
+const PERIOD_OPTIONS = {
+  weekly: { days: 7, label: 'Semanal (7d)' },
+  monthly: { days: 30, label: 'Mensal (30d)' },
+  bimonthly: { days: 60, label: 'Bimestral (60d)' },
+  quarterly: { days: 90, label: 'Trimestral (90d)' },
+  semiannual: { days: 180, label: 'Semestral (180d)' },
+  annual: { days: 365, label: 'Anual (365d)' },
+  biannual: { days: 730, label: 'Bienal (2 anos)' },
+  triennial: { days: 1095, label: 'Trienal (3 anos)' },
+  fiveYears: { days: 1825, label: '5 anos' },
+  tenYears: { days: 3650, label: '10 anos' },
+};
+
+const computeMovingAverage = (series, windowSize = 7) => {
+  const result = [];
+  let sum = 0;
+  let count = 0;
+  const queue = [];
+
+  series.forEach((value) => {
+    if (typeof value === 'number') {
+      sum += value;
+      queue.push(value);
+      count += 1;
+    } else {
+      queue.push(null);
+      count += 1;
+    }
+
+    if (queue.length > windowSize) {
+      const removed = queue.shift();
+      if (typeof removed === 'number') {
+        sum -= removed;
+        count -= 1;
+      }
+    }
+
+    if (queue.length === windowSize && count > 0) {
+      result.push(sum / count);
+    } else {
+      result.push(null);
+    }
+  });
+
+  return result;
+};
+
 const OilPriceChart = () => {
   const [chartData, setChartData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
   const [error, setError] = useState(null);
-  const [period, setPeriod] = useState('monthly'); // 'weekly' or 'monthly'
+  const [period, setPeriod] = useState('monthly');
+  const [chartType, setChartType] = useState('line');
+  const [seriesFilter, setSeriesFilter] = useState('both');
+  const [showMovingAverage, setShowMovingAverage] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
 
   const forceUpdateOilPrices = async () => {
@@ -38,15 +100,14 @@ const OilPriceChart = () => {
         try {
           const { data, error } = await supabase.functions.invoke('fetch-oil-prices');
           if (error) throw error;
-          
+
           if (data?.data && (data.data.WTI || data.data.BRENT)) {
-            // Data local (não UTC)
             const now = new Date();
             const year = now.getFullYear();
             const month = String(now.getMonth() + 1).padStart(2, '0');
             const day = String(now.getDate()).padStart(2, '0');
             const today = `${year}-${month}-${day}`;
-            
+
             const { error: upsertError } = await supabase.from('oil_prices').upsert({
               date: today,
               wti_price: data.data.WTI?.price || null,
@@ -57,9 +118,9 @@ const OilPriceChart = () => {
             }, {
               onConflict: 'date'
             });
-            
+
             if (upsertError) throw upsertError;
-            
+
             setLastUpdate(new Date().toLocaleTimeString());
             await fetchOilPriceHistory();
           } else {
@@ -85,10 +146,10 @@ const OilPriceChart = () => {
     setLoading(true);
     setError(null);
     try {
-      // Fetch based on selected period
-      const daysToFetch = selectedPeriod === 'weekly' ? 7 : 30;
+      const periodConfig = PERIOD_OPTIONS[selectedPeriod] || PERIOD_OPTIONS.monthly;
+      const daysToFetch = periodConfig.days;
       const startDate = new Date();
-      startDate.setDate(startDate.getDate() - daysToFetch);
+      startDate.setDate(startDate.getDate() - (daysToFetch - 1));
       const fromDate = startDate.toISOString().split('T')[0];
 
       const { data, error } = await supabase
@@ -99,11 +160,15 @@ const OilPriceChart = () => {
 
       if (error) throw error;
 
-      const formattedData = (data || []).map(item => ({
-        date: new Date(item.date).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
-        WTI: item.wti_price,
-        BRENT: item.brent_price,
-      }));
+      const formattedData = (data || []).map(item => {
+        const date = new Date(`${item.date}T00:00:00`);
+        return {
+          isoDate: item.date,
+          date: date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
+          WTI: item.wti_price ?? null,
+          BRENT: item.brent_price ?? null,
+        };
+      });
 
       setChartData(formattedData);
     } catch (err) {
@@ -117,6 +182,40 @@ const OilPriceChart = () => {
   useEffect(() => {
     fetchOilPriceHistory();
   }, [period]);
+
+  const filteredData = useMemo(() => {
+    if (!chartData.length) return [];
+
+    const selectedKeys = [];
+    if (seriesFilter === 'both' || seriesFilter === 'wti') selectedKeys.push('WTI');
+    if (seriesFilter === 'both' || seriesFilter === 'brent') selectedKeys.push('BRENT');
+
+    const movingAverageCache = {};
+    if (showMovingAverage) {
+      selectedKeys.forEach((key) => {
+        movingAverageCache[key] = computeMovingAverage(chartData.map(entry => entry[key]));
+      });
+    }
+
+    return chartData.map((entry, index) => {
+      const output = {
+        date: entry.date,
+        isoDate: entry.isoDate,
+      };
+
+      selectedKeys.forEach((key) => {
+        output[key] = entry[key];
+        if (showMovingAverage) {
+          output[`${key}_MA`] = movingAverageCache[key]?.[index] ?? null;
+        }
+      });
+
+      return output;
+    });
+  }, [chartData, seriesFilter, showMovingAverage]);
+
+  const periodLabel = PERIOD_OPTIONS[period]?.label ?? PERIOD_OPTIONS.monthly.label;
+  const hasMovingAverage = showMovingAverage && filteredData.some(entry => Object.keys(entry).some(key => key.endsWith('_MA') && typeof entry[key] === 'number'));
 
   if (loading) {
     return (
@@ -138,7 +237,7 @@ const OilPriceChart = () => {
     );
   }
 
-  if (chartData.length === 0) {
+  if (filteredData.length === 0) {
     return (
       <div className="bg-card border rounded-lg p-6 flex flex-col items-center justify-center h-96 gap-4">
         <TrendingUp className="w-12 h-12 text-muted-foreground" />
@@ -168,11 +267,11 @@ const OilPriceChart = () => {
             <h3 className="text-xl font-bold text-foreground">Evolução dos Preços do Petróleo</h3>
             <p className="text-sm text-muted-foreground flex items-center gap-1">
               <DollarSign className="w-3 h-3" />
-              Preços em USD por barril - {period === 'weekly' ? 'Últimos 7 dias' : 'Últimos 30 dias'}
+              Preços em USD por barril · {periodLabel}
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-3 justify-end">
           <Button
             onClick={forceUpdateOilPrices}
             disabled={updating}
@@ -188,58 +287,141 @@ const OilPriceChart = () => {
             </span>
           )}
           <Select value={period} onValueChange={setPeriod}>
-            <SelectTrigger className="w-[140px]">
+            <SelectTrigger className="w-[160px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="weekly">Semanal (7d)</SelectItem>
-              <SelectItem value="monthly">Mensal (30d)</SelectItem>
+              {Object.entries(PERIOD_OPTIONS).map(([key, option]) => (
+                <SelectItem key={key} value={key}>{option.label}</SelectItem>
+              ))}
             </SelectContent>
           </Select>
-          <Button onClick={() => fetchOilPriceHistory(period)} variant="ghost" size="icon">
-            <RefreshCw className="w-4 h-4" />
-          </Button>
+          <Select value={chartType} onValueChange={setChartType}>
+            <SelectTrigger className="w-[140px]">
+              <SelectValue placeholder="Tipo de gráfico" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="line">Linhas</SelectItem>
+              <SelectItem value="bar">Barras</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={seriesFilter} onValueChange={(value) => value && setSeriesFilter(value)}>
+            <SelectTrigger className="w-[160px]">
+              <SelectValue placeholder="Séries exibidas" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="both">WTI + Brent</SelectItem>
+              <SelectItem value="wti">Somente WTI</SelectItem>
+              <SelectItem value="brent">Somente Brent</SelectItem>
+            </SelectContent>
+          </Select>
+          <label className="flex items-center gap-2 pl-3 border-l pr-3 text-sm text-muted-foreground">
+            <Checkbox
+              id="toggle-moving-average"
+              checked={showMovingAverage}
+              onCheckedChange={(checked) => setShowMovingAverage(Boolean(checked))}
+            />
+            Média móvel (7d)
+          </label>
         </div>
       </div>
 
       <ResponsiveContainer width="100%" height={350}>
-        <LineChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-          <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-          <XAxis 
-            dataKey="date" 
-            className="text-xs"
-            tick={{ fill: 'hsl(var(--muted-foreground))' }}
-          />
-          <YAxis 
-            className="text-xs"
-            tick={{ fill: 'hsl(var(--muted-foreground))' }}
-            domain={['dataMin - 2', 'dataMax + 2']}
-            tickFormatter={(value) => `$${value.toFixed(0)}`}
-          />
-          <Tooltip content={<CustomTooltip />} />
-          <Legend 
-            wrapperStyle={{ paddingTop: '20px' }}
-            iconType="line"
-          />
-          <Line
-            type="monotone"
-            dataKey="WTI"
-            stroke="#3b82f6"
-            strokeWidth={2}
-            dot={{ fill: '#3b82f6', r: 4 }}
-            activeDot={{ r: 6 }}
-            name="WTI Crude"
-          />
-          <Line
-            type="monotone"
-            dataKey="BRENT"
-            stroke="#10b981"
-            strokeWidth={2}
-            dot={{ fill: '#10b981', r: 4 }}
-            activeDot={{ r: 6 }}
-            name="Brent Crude"
-          />
-        </LineChart>
+        {chartType === 'line' ? (
+          <LineChart data={filteredData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+            <XAxis 
+              dataKey="date" 
+              className="text-xs"
+              tick={{ fill: 'hsl(var(--muted-foreground))' }}
+            />
+            <YAxis 
+              className="text-xs"
+              tick={{ fill: 'hsl(var(--muted-foreground))' }}
+              domain={['dataMin - 2', 'dataMax + 2']}
+              tickFormatter={(value) => `$${value.toFixed(0)}`}
+            />
+            <Tooltip content={<CustomTooltip />} />
+            <Legend 
+              wrapperStyle={{ paddingTop: '20px' }}
+              iconType="line"
+            />
+            {(seriesFilter === 'both' || seriesFilter === 'wti') && (
+              <Line
+                type="monotone"
+                dataKey="WTI"
+                stroke="#3b82f6"
+                strokeWidth={2}
+                dot={{ fill: '#3b82f6', r: 4 }}
+                activeDot={{ r: 6 }}
+                name="WTI Crude"
+                isAnimationActive={false}
+              />
+            )}
+            {(seriesFilter === 'both' || seriesFilter === 'brent') && (
+              <Line
+                type="monotone"
+                dataKey="BRENT"
+                stroke="#10b981"
+                strokeWidth={2}
+                dot={{ fill: '#10b981', r: 4 }}
+                activeDot={{ r: 6 }}
+                name="Brent Crude"
+                isAnimationActive={false}
+              />
+            )}
+            {hasMovingAverage && (seriesFilter === 'both' || seriesFilter === 'wti') && (
+              <Line
+                type="monotone"
+                dataKey="WTI_MA"
+                stroke="#1d4ed8"
+                strokeDasharray="6 4"
+                strokeWidth={2}
+                dot={false}
+                name="WTI · MM7"
+                isAnimationActive={false}
+              />
+            )}
+            {hasMovingAverage && (seriesFilter === 'both' || seriesFilter === 'brent') && (
+              <Line
+                type="monotone"
+                dataKey="BRENT_MA"
+                stroke="#047857"
+                strokeDasharray="6 4"
+                strokeWidth={2}
+                dot={false}
+                name="Brent · MM7"
+                isAnimationActive={false}
+              />
+            )}
+          </LineChart>
+        ) : (
+          <BarChart data={filteredData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+            <XAxis 
+              dataKey="date" 
+              className="text-xs"
+              tick={{ fill: 'hsl(var(--muted-foreground))' }}
+            />
+            <YAxis 
+              className="text-xs"
+              tick={{ fill: 'hsl(var(--muted-foreground))' }}
+              domain={['dataMin - 2', 'dataMax + 2']}
+              tickFormatter={(value) => `$${value.toFixed(0)}`}
+            />
+            <Tooltip content={<CustomTooltip />} />
+            <Legend 
+              wrapperStyle={{ paddingTop: '20px' }}
+              iconType="square"
+            />
+            {(seriesFilter === 'both' || seriesFilter === 'wti') && (
+              <Bar dataKey="WTI" fill="#3b82f6" name="WTI Crude" />
+            )}
+            {(seriesFilter === 'both' || seriesFilter === 'brent') && (
+              <Bar dataKey="BRENT" fill="#10b981" name="Brent Crude" />
+            )}
+          </BarChart>
+        )}
       </ResponsiveContainer>
 
       <div className="mt-4 p-4 bg-muted/50 rounded-lg border">

@@ -35,10 +35,12 @@ const Dashboard = () => {
     const [oilPrice, setOilPrice] = useState(null);
     const [oilPriceLoading, setOilPriceLoading] = useState(true);
 
+    const [selectedVehicleType, setSelectedVehicleType] = useState('');
     const [selectedFuel, setSelectedFuel] = useState('');
     const [selectedGroup, setSelectedGroup] = useState('Todos');
     const [selectedDestination, setSelectedDestination] = useState(null);
     const [showFilters, setShowFilters] = useState(true);
+    const [suppliersPerBase, setSuppliersPerBase] = useState('1');
     
     const [isReportModalOpen, setIsReportModalOpen] = useState(false);
     const [isManualModalOpen, setIsManualModalOpen] = useState(false);
@@ -95,6 +97,13 @@ const Dashboard = () => {
             if (Object.keys(userSettings.fuelTypes).length > 0) {
               setSelectedFuel(prev => prev || Object.keys(userSettings.fuelTypes)[0]);
             }
+            const vehicleKeys = Object.keys(userSettings.vehicleTypes || {});
+            setSelectedVehicleType(prev => {
+              if (prev && vehicleKeys.includes(prev)) {
+                return prev;
+              }
+              return vehicleKeys[0] || prev || '';
+            });
             if (allPostos.length > 0) {
               setSelectedDestination(prev => {
                 if (prev) return prev;
@@ -115,20 +124,100 @@ const Dashboard = () => {
         }
     }, [user, toast]);
     
+    const updateOilPricesInBackground = useCallback(async () => {
+        try {
+            console.log('⚙️ Invocando edge function fetch-oil-prices...');
+            const { data, error } = await supabase.functions.invoke('fetch-oil-prices');
+            if (error) throw error;
+
+            if (data?.data && (data.data.WTI || data.data.BRENT)) {
+                console.log('📡 Retorno bruto da API (edge function):', data.data);
+
+                const now = new Date();
+                const year = now.getFullYear();
+                const month = String(now.getMonth() + 1).padStart(2, '0');
+                const day = String(now.getDate()).padStart(2, '0');
+                const today = `${year}-${month}-${day}`;
+
+                const formatChangePercent = (current, previous) => {
+                    if (typeof current !== 'number' || typeof previous !== 'number' || previous === 0) {
+                        return '+0.00%';
+                    }
+                    const diff = ((current - previous) / previous) * 100;
+                    const sign = diff >= 0 ? '+' : '';
+                    return `${sign}${diff.toFixed(2)}%`;
+                };
+
+                const { data: previousRows, error: previousError } = await supabase
+                    .from('oil_prices')
+                    .select('wti_price, brent_price')
+                    .lt('date', today)
+                    .order('date', { ascending: false })
+                    .limit(1);
+
+                if (previousError && previousError.code !== 'PGRST116') {
+                    throw previousError;
+                }
+
+                const previousEntry = previousRows?.[0] || null;
+                const wtiCurrent = data.data.WTI?.price ?? null;
+                const brentCurrent = data.data.BRENT?.price ?? null;
+                const wtiChange = previousEntry?.wti_price != null
+                    ? formatChangePercent(wtiCurrent, previousEntry.wti_price)
+                    : '+0.00%';
+                const brentChange = previousEntry?.brent_price != null
+                    ? formatChangePercent(brentCurrent, previousEntry.brent_price)
+                    : '+0.00%';
+
+                const { error: upsertError } = await supabase.from('oil_prices').upsert({
+                    date: today,
+                    wti_price: data.data.WTI?.price || null,
+                    brent_price: data.data.BRENT?.price || null,
+                    wti_change: wtiChange,
+                    brent_change: brentChange,
+                    timestamp: new Date().toISOString()
+                }, {
+                    onConflict: 'date'
+                });
+
+                if (upsertError) {
+                    console.error('Erro ao salvar no banco:', upsertError);
+                    throw upsertError;
+                }
+
+                console.log('💾 Preço de petróleo persistido no banco:', {
+                    date: today,
+                    wti: data.data.WTI?.price ?? null,
+                    brent: data.data.BRENT?.price ?? null
+                });
+
+                const adjustedOilData = {
+                    ...(data.data || {}),
+                    WTI: data.data.WTI ? { ...data.data.WTI, change: wtiChange } : undefined,
+                    BRENT: data.data.BRENT ? { ...data.data.BRENT, change: brentChange } : undefined,
+                };
+
+                setOilPrice(adjustedOilData);
+                console.log('✅ Preço salvo no banco após chamar a API:', data.data);
+                console.log(`✅ Preços de petróleo atualizados e salvos no banco (${today})`);
+            }
+        } catch (err) {
+            console.error('Erro ao atualizar preços em background:', err);
+        }
+    }, []);
+
     const fetchOilPrice = useCallback(async () => {
         setOilPriceLoading(true);
         try {
-            // PASSO 1: Buscar preços ESTÁTICOS do banco de dados (mais recente)
             const { data: dbPrices, error: dbError } = await supabase
                 .from('oil_prices')
                 .select('date, wti_price, brent_price, wti_change, brent_change, timestamp')
                 .order('date', { ascending: false })
                 .limit(1)
                 .maybeSingle();
-            
+
             if (dbError && dbError.code !== 'PGRST116') throw dbError;
-            
-            // Se temos dados no banco, usar eles (ESTÁTICOS)
+
             if (dbPrices && dbPrices.wti_price) {
                 const oilData = {
                     WTI: {
@@ -139,8 +228,7 @@ const Dashboard = () => {
                         timestamp: dbPrices.timestamp || dbPrices.date
                     }
                 };
-                
-                // Adicionar BRENT se existir
+
                 if (dbPrices.brent_price) {
                     oilData.BRENT = {
                         price: dbPrices.brent_price,
@@ -150,35 +238,32 @@ const Dashboard = () => {
                         timestamp: dbPrices.timestamp || dbPrices.date
                     };
                 }
-                
+
+                console.log('🗄️ Preço de petróleo carregado do banco:', oilData);
                 setOilPrice(oilData);
-                
-                // PASSO 2: Verificar se precisa atualizar
+
                 const now = new Date();
                 const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
                 const isToday = dbPrices.date === todayStr;
-                
-                // Se não é de hoje OU passou mais de 1 hora, buscar novos dados
+
                 if (!isToday) {
                     console.log('Dados de petróleo desatualizados (data:', dbPrices.date, '!= hoje:', todayStr, '), atualizando...');
-                    updateOilPricesInBackground();
+                    await updateOilPricesInBackground();
                 } else {
                     const lastUpdate = new Date(dbPrices.timestamp || dbPrices.date);
                     const hoursSinceUpdate = (Date.now() - lastUpdate.getTime()) / (1000 * 60 * 60);
                     if (hoursSinceUpdate >= 1 || !dbPrices.brent_price) {
                         console.log('Atualizando preços de petróleo (última atualização há', hoursSinceUpdate.toFixed(1), 'horas)');
-                        updateOilPricesInBackground();
+                        await updateOilPricesInBackground();
                     }
                 }
             } else {
-                // Se não tem dados no banco, buscar da API pela primeira vez
                 console.log('Nenhum dado no banco, buscando da API...');
                 await updateOilPricesInBackground();
             }
-            
-        } catch (err) { 
-            console.error("Failed to fetch oil price:", err.message);
-            // Fallback em caso de erro total
+
+        } catch (err) {
+            console.error('Failed to fetch oil price:', err.message);
             setOilPrice({
                 WTI: {
                     price: 61.47,
@@ -195,56 +280,16 @@ const Dashboard = () => {
                     timestamp: new Date().toISOString()
                 }
             });
-        } finally { 
-            setOilPriceLoading(false); 
+        } finally {
+            setOilPriceLoading(false);
         }
-    }, []);
-    
-    // Função para atualizar preços em background (não bloqueia UI)
-    const updateOilPricesInBackground = async () => {
-        try {
-            const { data, error } = await supabase.functions.invoke('fetch-oil-prices');
-            if (error) throw error;
-            
-            if (data?.data && (data.data.WTI || data.data.BRENT)) {
-                // Data local (não UTC) para evitar problema de fuso horário
-                const now = new Date();
-                const year = now.getFullYear();
-                const month = String(now.getMonth() + 1).padStart(2, '0');
-                const day = String(now.getDate()).padStart(2, '0');
-                const today = `${year}-${month}-${day}`;
-                
-                const { error: upsertError } = await supabase.from('oil_prices').upsert({
-                    date: today,
-                    wti_price: data.data.WTI?.price || null,
-                    brent_price: data.data.BRENT?.price || null,
-                    wti_change: data.data.WTI?.change || '+0.00%',
-                    brent_change: data.data.BRENT?.change || '+0.00%',
-                    timestamp: new Date().toISOString()
-                }, {
-                    onConflict: 'date'
-                });
-                
-                if (upsertError) {
-                    console.error('Erro ao salvar no banco:', upsertError);
-                    throw upsertError;
-                }
-                
-                // Atualizar state com novos dados
-                setOilPrice(data.data);
-                console.log(`✅ Preços de petróleo atualizados e salvos no banco (${today})`);
-            }
-        } catch (err) {
-            console.error('Erro ao atualizar preços em background:', err);
-        }
-    };
+    }, [updateOilPricesInBackground]);
 
     useEffect(() => {
         if (user) {
             fetchData();
         }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [user?.id]); // Só roda quando user.id mudar (login/logout)
+    }, [user?.id, fetchData]);
     
     useEffect(() => {
         // Buscar preços no carregamento
@@ -263,105 +308,136 @@ const Dashboard = () => {
 
     const comparisonData = useMemo(() => {
         if (!selectedFuel || !selectedDestination || !suppliers.length) return [];
-        
+
         const destinationCityId = selectedDestination.city_id;
-        
         const postoBandeira = selectedDestination.bandeira || 'bandeira_branca';
-        
+        const vehicleTypesMap = settings?.vehicleTypes || {};
+
+        const resolveFreightForRoute = (route) => {
+            if (!route?.costs) {
+                return { cost: 0, vehicleKey: selectedVehicleType || null };
+            }
+
+            const entries = Object.entries(route.costs)
+                .map(([key, value]) => {
+                    const numericValue = typeof value === 'number' ? value : parseFloat(value);
+                    if (!Number.isFinite(numericValue) || numericValue < 0) {
+                        return null;
+                    }
+                    return [key, numericValue];
+                })
+                .filter(Boolean);
+
+            if (entries.length === 0) {
+                return { cost: 0, vehicleKey: selectedVehicleType || null };
+            }
+
+            const preferredEntry = selectedVehicleType
+                ? entries.find(([key]) => key === selectedVehicleType)
+                : undefined;
+
+            const chosenEntry = preferredEntry || entries.reduce((best, current) => (
+                current[1] < best[1] ? current : best
+            ));
+
+            return { cost: chosenEntry[1], vehicleKey: chosenEntry[0] };
+        };
+
         // Pegar bases do grupo selecionado
-        const groupBaseCityIds = selectedGroup && selectedGroup !== 'Todos' 
+        const groupBaseCityIds = selectedGroup && selectedGroup !== 'Todos'
             ? (groups.find(g => g.id === selectedGroup)?.base_city_ids || [])
             : null;
 
-        return suppliers
+        const results = suppliers
             .filter(s => s.available_products?.includes(selectedFuel))
-            // FILTRO DE BANDEIRA: Postos bandeirados só podem comprar da própria bandeira
             .filter(s => {
                 const supplierBandeira = s.bandeira || 'bandeira_branca';
-                
-                // Bandeira branca pode comprar de qualquer um
                 if (postoBandeira === 'bandeira_branca') return true;
-                // Postos bandeirados só podem comprar da própria bandeira (NÃO aceita mais bandeira_branca)
                 return supplierBandeira === postoBandeira;
             })
-            // FILTRO DE BASE DO GRUPO: Se grupo tem bases específicas, filtrar fornecedores
             .filter(s => {
                 if (!groupBaseCityIds || groupBaseCityIds.length === 0) return true;
-                // Fornecedor deve ter pelo menos uma base em comum com o grupo
                 return (s.city_ids || []).some(cityId => groupBaseCityIds.includes(cityId));
             })
             .map(supplier => {
-                // Filtrar preços pela base selecionada (se houver)
-                let priceData;
-                if (selectedBase?.id) {
-                    priceData = dailyPrices.find(p => 
-                        p.supplier_id === supplier.id && 
-                        p.base_city_id === selectedBase.id
-                    );
-                } else {
-                    priceData = dailyPrices.find(p => p.supplier_id === supplier.id);
-                }
-                
+                const priceData = selectedBase?.id
+                    ? dailyPrices.find(p => p.supplier_id === supplier.id && p.base_city_id === selectedBase.id)
+                    : dailyPrices.find(p => p.supplier_id === supplier.id);
+
                 const currentPrice = priceData?.prices?.[selectedFuel];
                 if (currentPrice === undefined || currentPrice === null) return null;
-                
-                // Calcular frete da base selecionada até o destino
+
                 let bestFreight = Infinity;
                 let baseUsed = null;
-                
+                let freightVehicleUsed = selectedVehicleType || null;
+
                 if (selectedBase?.id) {
-                    // Se base selecionada, usar apenas essa base
-                    const route = freightRoutes.find(r => 
-                        r.origin_city_id === selectedBase.id && 
+                    const route = freightRoutes.find(r =>
+                        r.origin_city_id === selectedBase.id &&
                         r.destination_city_id === destinationCityId
                     );
-                    
-                    // Frete é por veículo, não por combustível - pegar o menor custo disponível
-                    if (route?.costs) {
-                        const costs = Object.values(route.costs).filter(c => typeof c === 'number' && c > 0);
-                        bestFreight = costs.length > 0 ? Math.min(...costs) : 0;
+
+                    if (route) {
+                        const { cost, vehicleKey } = resolveFreightForRoute(route);
+                        bestFreight = cost;
+                        freightVehicleUsed = vehicleKey;
                     } else {
                         bestFreight = 0;
                     }
                     baseUsed = selectedBase.name;
                 } else {
-                    // Senão, buscar melhor frete entre bases do fornecedor
-                    // Se grupo tem bases definidas, usar apenas essas; senão usar todas as bases do fornecedor
                     const basesToCheck = groupBaseCityIds && groupBaseCityIds.length > 0
                         ? (supplier.city_ids || []).filter(cityId => groupBaseCityIds.includes(cityId))
                         : (supplier.city_ids || []);
-                    
+
                     basesToCheck.forEach(originCityId => {
-                        const route = freightRoutes.find(r => 
-                            r.origin_city_id === originCityId && 
+                        const route = freightRoutes.find(r =>
+                            r.origin_city_id === originCityId &&
                             r.destination_city_id === destinationCityId
                         );
-                        if (route?.costs) {
-                            const costs = Object.values(route.costs).filter(c => typeof c === 'number' && c > 0);
-                            const minCost = costs.length > 0 ? Math.min(...costs) : 0;
-                            if (minCost > 0 && minCost < bestFreight) {
-                                bestFreight = minCost;
-                                const baseCity = baseCities.find(b => b.id === originCityId);
-                                baseUsed = baseCity?.name;
-                            }
+                        if (!route) return;
+
+                        const { cost, vehicleKey } = resolveFreightForRoute(route);
+                        if (cost < bestFreight) {
+                            bestFreight = cost;
+                            freightVehicleUsed = vehicleKey;
+                            const baseCity = baseCities.find(b => b.id === originCityId);
+                            baseUsed = baseCity?.name;
                         }
                     });
                 }
 
-                if (bestFreight === Infinity) bestFreight = 0;
+                if (bestFreight === Infinity) {
+                    bestFreight = 0;
+                }
+
+                const freightVehicleName = freightVehicleUsed
+                    ? (vehicleTypesMap[freightVehicleUsed]?.name || freightVehicleUsed)
+                    : null;
 
                 return {
                     id: supplier.id,
                     name: supplier.name,
                     currentPrice,
                     freight: bestFreight,
+                    freightVehicle: freightVehicleUsed,
+                    freightVehicleName,
                     finalPrice: currentPrice + bestFreight,
                     baseName: baseUsed || 'Sem base'
                 };
             })
             .filter(Boolean)
             .sort((a, b) => a.finalPrice - b.finalPrice);
-    }, [selectedFuel, selectedDestination, selectedBase, selectedGroup, dailyPrices, suppliers, freightRoutes, baseCities, groups]);
+
+        return results;
+    }, [selectedFuel, selectedDestination, suppliers, selectedGroup, selectedBase, dailyPrices, freightRoutes, baseCities, groups, selectedVehicleType, settings]);
+
+    const selectedVehicleLabel = useMemo(() => {
+        if (selectedVehicleType) {
+            return settings?.vehicleTypes?.[selectedVehicleType]?.name || selectedVehicleType;
+        }
+        return 'N/D';
+    }, [selectedVehicleType, settings]);
 
     // Calcular quais combustíveis têm preço na base + grupo selecionados
     const availableFuels = useMemo(() => {
@@ -406,11 +482,39 @@ const Dashboard = () => {
 
     const handleCopyToClipboard = () => {
         if (comparisonData.length === 0) return;
-        const text = `Relatório Rápido - ${new Date().toLocaleDateString('pt-BR')}
-Combustível: ${settings.fuelTypes[selectedFuel]?.name} | Destino: ${selectedDestination.name}
-Melhor Custo: ${comparisonData[0].name} @ ${comparisonData[0].finalPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 4 })}/L\n\n` +
-            comparisonData.map((d, i) => `${i + 1}. ${d.name}: ${d.finalPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 4 })}/L`).join('\n');
-        navigator.clipboard.writeText(text).then(() => { toast({ title: 'Copiado para a área de transferência!' }); });
+
+        const formatCurrency = (value) => value.toLocaleString('pt-BR', {
+            style: 'currency',
+            currency: 'BRL',
+            minimumFractionDigits: 4
+        });
+
+        const maxSuppliers = Number.isNaN(parseInt(suppliersPerBase, 10))
+            ? comparisonData.length
+            : Math.max(1, parseInt(suppliersPerBase, 10));
+
+        const headerLines = [
+            `Relatório Rápido - ${new Date().toLocaleDateString('pt-BR')}`,
+            `Combustível: ${settings.fuelTypes[selectedFuel]?.name || selectedFuel} | Destino: ${selectedDestination?.name || 'Não informado'} | Veículo: ${selectedVehicleLabel}`,
+            `Base selecionada: ${selectedBase?.name || 'Automática por fornecedor'}`
+        ];
+
+        const subset = comparisonData.slice(0, maxSuppliers);
+
+        const best = subset[0];
+        if (best) {
+            headerLines.push(`Melhor Custo: ${best.name} @ ${formatCurrency(best.finalPrice)}/L (Base: ${best.baseName} | Frete (${best.freightVehicleName || 'N/D'}): ${formatCurrency(best.freight)}/L)`);
+        }
+
+        const listLines = subset.map((d, i) => {
+            const freightLabel = d.freightVehicleName || 'N/D';
+            return `${i + 1}. ${d.name} — Base: ${d.baseName} — Frete (${freightLabel}): ${formatCurrency(d.freight)}/L — Total: ${formatCurrency(d.finalPrice)}/L`;
+        });
+
+        const text = [...headerLines, '', ...listLines].join('\n');
+        navigator.clipboard.writeText(text).then(() => {
+            toast({ title: 'Copiado para a área de transferência!' });
+        });
     };
     
     const handleGeneratePdf = () => {
@@ -522,6 +626,18 @@ Melhor Custo: ${comparisonData[0].name} @ ${comparisonData[0].finalPrice.toLocal
                                 <SelectTrigger className="w-full sm:w-[200px] bg-background"><SelectValue placeholder="Selecione a Base..." /></SelectTrigger>
                                 <SelectContent>{(baseCities || []).map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
                             </Select>
+                            <Select value={selectedVehicleType} onValueChange={setSelectedVehicleType}>
+                                <SelectTrigger className="w-full sm:w-[200px] bg-background">
+                                    <SelectValue placeholder="Selecione o Veículo..." />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {Object.entries(settings.vehicleTypes || {}).map(([key, info]) => (
+                                        <SelectItem key={key} value={key}>
+                                            {info.name || key}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
                             <Select value={selectedFuel} onValueChange={setSelectedFuel}>
                                 <SelectTrigger className="w-full sm:w-[200px] bg-background">
                                     <SelectValue placeholder="Selecione o Combustível..." />
@@ -584,6 +700,9 @@ Melhor Custo: ${comparisonData[0].name} @ ${comparisonData[0].finalPrice.toLocal
                     suppliers={suppliers}
                     freightRoutes={freightRoutes}
                     settings={settings}
+                    selectedVehicleType={selectedVehicleType}
+                    suppliersPerBaseSetting={suppliersPerBase}
+                    onSuppliersPerBaseChange={setSuppliersPerBase}
                 />
             </motion.div>
 

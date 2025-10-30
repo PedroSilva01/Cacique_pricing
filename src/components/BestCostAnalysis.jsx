@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { TrendingDown, TrendingUp, MapPin, Building2, DollarSign, Fuel, Award, Filter } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -15,11 +15,11 @@ const BestCostAnalysis = ({
   dailyPrices = [],
   suppliers = [],
   freightRoutes = [],
-  settings = {}
+  settings = {},
+  selectedVehicleType = '',
+  suppliersPerBaseSetting = '1',
+  onSuppliersPerBaseChange = () => {},
 }) => {
-  // Estado para controlar quantos fornecedores mostrar por base
-  const [suppliersPerBase, setSuppliersPerBase] = useState('1');
-  
   const analysis = useMemo(() => {
     if (!selectedGroup || selectedGroup === 'Todos' || !selectedFuel) {
       return null;
@@ -78,20 +78,50 @@ const BestCostAnalysis = ({
             r.destination_city_id === posto.city_id
           );
 
-          // Pegar menor custo de frete disponível
-          let freight = 0;
-          if (route?.costs) {
-            const costs = Object.values(route.costs).filter(c => typeof c === 'number' && c > 0);
-            freight = costs.length > 0 ? Math.min(...costs) : 0;
-          }
+          const resolveFreight = () => {
+            if (!route?.costs) {
+              return { cost: 0, vehicleKey: selectedVehicleType || null };
+            }
+
+            const entries = Object.entries(route.costs)
+              .map(([key, value]) => {
+                const numericValue = typeof value === 'number' ? value : parseFloat(value);
+                if (!Number.isFinite(numericValue) || numericValue < 0) {
+                  return null;
+                }
+                return [key, numericValue];
+              })
+              .filter(Boolean);
+
+            if (entries.length === 0) {
+              return { cost: 0, vehicleKey: selectedVehicleType || null };
+            }
+
+            const preferredEntry = selectedVehicleType
+              ? entries.find(([key]) => key === selectedVehicleType)
+              : undefined;
+
+            const chosenEntry = preferredEntry || entries.reduce((best, current) => (
+              current[1] < best[1] ? current : best
+            ));
+
+            return { cost: chosenEntry[1], vehicleKey: chosenEntry[0] };
+          };
+
+          const { cost: freight, vehicleKey } = resolveFreight();
           const finalCost = basePrice + freight;
+          const vehicleName = vehicleKey
+            ? settings?.vehicleTypes?.[vehicleKey]?.name || vehicleKey
+            : 'N/D';
 
           return {
             supplier: supplier?.name || 'Desconhecido',
             basePrice,
             freight,
             finalCost,
-            posto: posto.name
+            posto: posto.name,
+            vehicleKey,
+            vehicleName
           };
         }).filter(Boolean); // Remover fornecedores incompatíveis
 
@@ -121,9 +151,14 @@ const BestCostAnalysis = ({
       }, {});
       
       // Top N fornecedores ordenados por custo
+      const parsedSuppliers = parseInt(suppliersPerBaseSetting, 10);
+      const maxSuppliers = Number.isNaN(parsedSuppliers)
+        ? Object.values(costsBySupplier).length
+        : Math.max(1, parsedSuppliers);
+
       const topSuppliers = Object.values(costsBySupplier)
         .sort((a, b) => a.finalCost - b.finalCost)
-        .slice(0, parseInt(suppliersPerBase) || 1);
+        .slice(0, maxSuppliers);
 
       return {
         base: base.name,
@@ -158,7 +193,7 @@ const BestCostAnalysis = ({
       savingsPercent,
       fuelName: settings.fuelTypes?.[selectedFuel]?.name || selectedFuel
     };
-  }, [selectedGroup, selectedFuel, selectedDestination, baseCities, groups, postos, dailyPrices, suppliers, freightRoutes, settings, suppliersPerBase]);
+  }, [selectedGroup, selectedFuel, selectedDestination, baseCities, groups, postos, dailyPrices, suppliers, freightRoutes, settings, suppliersPerBaseSetting, selectedVehicleType]);
 
   if (!analysis) {
     return (
@@ -175,7 +210,7 @@ const BestCostAnalysis = ({
       <div className="flex items-center gap-3 mb-4 p-4 bg-muted/30 rounded-lg border">
         <Filter className="w-5 h-5 text-primary" />
         <Label className="font-semibold">Fornecedores por Base:</Label>
-        <Select value={suppliersPerBase} onValueChange={setSuppliersPerBase}>
+        <Select value={suppliersPerBaseSetting} onValueChange={onSuppliersPerBaseChange}>
           <SelectTrigger className="w-[200px]">
             <SelectValue />
           </SelectTrigger>
@@ -385,7 +420,7 @@ const BestCostAnalysis = ({
                   </div>
                   <div className="flex items-center justify-between text-xs text-muted-foreground pl-6">
                     <span>Preço: R$ {supplier.basePrice.toFixed(4)}</span>
-                    <span>Frete: R$ {supplier.freight.toFixed(4)}</span>
+                    <span>Frete ({supplier.vehicleName}): R$ {supplier.freight.toFixed(4)}</span>
                     <span className="font-semibold text-green-600">
                       Total: R$ {supplier.finalCost.toFixed(4)}
                     </span>

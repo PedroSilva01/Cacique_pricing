@@ -11,7 +11,6 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import { Calendar } from 'lucide-react';
 import { defaultSettings } from '@/lib/mockData';
-import AverageFuelPricesChart from '@/components/AverageFuelPricesChart';
 
 const COLORS = ['#3b82f6', '#10b981', '#ef4444', '#f97316', '#8b5cf6', '#ec4899', '#64748b', '#f59e0b', '#34d399', '#a78bfa'];
 
@@ -436,7 +435,6 @@ const Analysis = () => {
         </div>
       </div>
 
-      <AverageFuelPricesChart selectedBase={selectedBase} baseCities={baseCities} />
     </motion.div>
   );
 };

@@ -29,28 +29,58 @@ DROP POLICY IF EXISTS "Service role can insert oil prices" ON public.oil_prices;
 DROP POLICY IF EXISTS "Service role can update oil prices" ON public.oil_prices;
 DROP POLICY IF EXISTS "Authenticated users can upsert oil prices" ON public.oil_prices;
 
--- 4. Criar políticas novas
+-- 4. Criar políticas novas (idempotentes)
 
 -- Permitir leitura pública (qualquer pessoa pode ver preços)
-CREATE POLICY "Anyone can read oil prices"
-ON public.oil_prices
-FOR SELECT
-USING (true);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname = 'public'
+          AND tablename = 'oil_prices'
+          AND policyname = 'Anyone can read oil prices'
+    ) THEN
+        CREATE POLICY "Anyone can read oil prices"
+        ON public.oil_prices
+        FOR SELECT
+        USING (true);
+    END IF;
+END $$;
 
 -- Permitir inserção para usuários autenticados
-CREATE POLICY "Authenticated users can insert oil prices"
-ON public.oil_prices
-FOR INSERT
-TO authenticated
-WITH CHECK (true);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname = 'public'
+          AND tablename = 'oil_prices'
+          AND policyname = 'Authenticated users can insert oil prices'
+    ) THEN
+        CREATE POLICY "Authenticated users can insert oil prices"
+        ON public.oil_prices
+        FOR INSERT
+        TO authenticated
+        WITH CHECK (true);
+    END IF;
+END $$;
 
 -- Permitir atualização para usuários autenticados
-CREATE POLICY "Authenticated users can update oil prices"
-ON public.oil_prices
-FOR UPDATE
-TO authenticated
-USING (true)
-WITH CHECK (true);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname = 'public'
+          AND tablename = 'oil_prices'
+          AND policyname = 'Authenticated users can update oil prices'
+    ) THEN
+        CREATE POLICY "Authenticated users can update oil prices"
+        ON public.oil_prices
+        FOR UPDATE
+        TO authenticated
+        USING (true)
+        WITH CHECK (true);
+    END IF;
+END $$;
 
 -- 5. Criar índice para performance
 CREATE INDEX IF NOT EXISTS idx_oil_prices_date ON public.oil_prices(date DESC);

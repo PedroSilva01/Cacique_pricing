@@ -90,7 +90,7 @@ async function fetchOilPrices(apiKey: string): Promise<OilPriceData> {
     // Try to fetch BRENT separately
     let brentResult = null;
     try {
-      const brentResponse = await fetch('https://api.oilpriceapi.com/v1/prices/latest?by_code=BRENT_USD', {
+      const brentResponse = await fetch('https://api.oilpriceapi.com/v1/prices/latest?by_code=BRENT_CRUDE_USD', {
         headers: {
           'Authorization': `Token ${apiKey}`
         }
@@ -130,8 +130,8 @@ async function fetchOilPrices(apiKey: string): Promise<OilPriceData> {
       console.log('WTI fallback applied');
     }
 
-    // Handle BRENT if we got actual data; otherwise, derive from WTI
-    const brentData = extractPriceEntry(brentResult, 'BRENT_USD');
+    // Handle BRENT: usar o valor real da API quando disponível; caso contrário, aplicar apenas um default estático
+    const brentData = extractPriceEntry(brentResult, 'BRENT_CRUDE_USD');
 
     if (brentData?.price && typeof brentData.price === 'number') {
       transformedData.BRENT = {
@@ -143,16 +143,14 @@ async function fetchOilPrices(apiKey: string): Promise<OilPriceData> {
       };
       console.log('BRENT parsed successfully:', brentData.price);
     } else {
-      const referencePrice = transformedData.WTI?.price ?? DEFAULT_WTI_PRICE;
-      const estimatedBrent = referencePrice * 1.045; // small premium over WTI
       transformedData.BRENT = {
-        price: parseFloat(estimatedBrent.toFixed(2)) || DEFAULT_BRENT_PRICE,
+        price: DEFAULT_BRENT_PRICE,
         change: '+0.00%',
         currency: 'USD',
         unit: 'barrel',
         timestamp: transformedData.WTI?.timestamp ?? new Date().toISOString(),
       };
-      console.log('BRENT fallback/estimate applied:', transformedData.BRENT.price);
+      console.log('BRENT fallback applied with default price:', transformedData.BRENT.price);
     }
 
     return transformedData;

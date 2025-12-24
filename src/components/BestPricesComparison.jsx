@@ -10,6 +10,7 @@ import { useAuth } from '@/contexts/SupabaseAuthContext';
 
 const BestPricesComparison = ({ settings, cities, suppliers, postos, groups, freightRoutes }) => {
   const { user } = useAuth();
+  const userId = user?.id;
   const [selectedFuels, setSelectedFuels] = useState([]);
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [selectedDestination, setSelectedDestination] = useState(null);
@@ -22,7 +23,7 @@ const BestPricesComparison = ({ settings, cities, suppliers, postos, groups, fre
   // Buscar preços de hoje
   useEffect(() => {
     const fetchTodayPrices = async () => {
-      if (!user) return;
+      if (!userId) return;
       setLoading(true);
       const today = new Date().toISOString().split('T')[0];
       
@@ -30,7 +31,7 @@ const BestPricesComparison = ({ settings, cities, suppliers, postos, groups, fre
         const { data, error } = await supabase
           .from('daily_prices')
           .select('*')
-          .eq('user_id', user.id)
+          .eq('user_id', userId)
           .eq('date', today);
         
         if (error) throw error;
@@ -43,7 +44,7 @@ const BestPricesComparison = ({ settings, cities, suppliers, postos, groups, fre
     };
 
     fetchTodayPrices();
-  }, [user]);
+  }, [userId]);
 
   // Inicializar com primeiro combustível
   useEffect(() => {

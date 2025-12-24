@@ -19,6 +19,7 @@ const BestCostAnalysis = ({
   selectedVehicleType = '',
   suppliersPerBaseSetting = '1',
   onSuppliersPerBaseChange = () => {},
+  selectedDate = null,
 }) => {
   const analysis = useMemo(() => {
     if (!selectedGroup || selectedGroup === 'Todos' || !selectedFuel) {
@@ -40,12 +41,16 @@ const BestCostAnalysis = ({
       const costsPerPosto = groupPostos.map(posto => {
         const postoBandeira = posto.bandeira || 'bandeira_branca';
         
-        // Preços da base para fornecedores que têm esse combustível
-        const basePrices = dailyPrices.filter(dp => 
-          dp.base_city_id === base.id &&
-          dp.group_ids?.includes(selectedGroup) &&
-          dp.prices?.[selectedFuel]
-        );
+        // Preços da base para fornecedores que têm esse combustível (filtrados por data)
+        const basePrices = dailyPrices.filter(dp => {
+          // Filtrar por data se selecionada
+          if (selectedDate && dp.date !== selectedDate) {
+            return false;
+          }
+          return dp.base_city_id === base.id &&
+            dp.group_ids?.includes(selectedGroup) &&
+            dp.prices?.[selectedFuel];
+        });
 
         if (basePrices.length === 0) return null;
 
@@ -318,9 +323,14 @@ const BestCostAnalysis = ({
                 const diff = base.bestCost - analysis.bestBase.bestCost;
                 const diffPercent = (diff / analysis.bestBase.bestCost) * 100;
                 const isBest = index === 0;
+                const isExpensive = !isBest && diff >= 0.01; // 1 centavo = R$ 0.01
 
                 return (
-                  <tr key={base.baseId} className={isBest ? 'bg-green-50 dark:bg-green-950/20' : 'hover:bg-muted/50'}>
+                  <tr key={base.baseId} className={
+                    isBest ? 'bg-green-50 dark:bg-green-950/20' : 
+                    isExpensive ? 'bg-red-50 dark:bg-red-950/20' : 
+                    'hover:bg-muted/50'
+                  }>
                     <td className="px-4 py-3">
                       {isBest ? (
                         <Award className="w-5 h-5 text-green-600" />

@@ -1,67 +1,32 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React from 'react';
 import { motion } from 'framer-motion';
 import { Calculator, RefreshCw } from 'lucide-react';
-import { supabase } from '@/lib/customSupabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { useToast } from '@/components/ui/use-toast';
-import { defaultSettings } from '@/lib/mockData';
 import BestPricesComparison from '@/components/BestPricesComparison';
 import { Button } from '@/components/ui/button';
+import { useSimulatorData } from '@/hooks/useSimulatorData';
+import { showErrorToast } from '@/lib/utils';
 
 const Simulator = () => {
   const { user } = useAuth();
   const { toast } = useToast();
+  const userId = user?.id;
 
-  const [loading, setLoading] = useState(true);
-  const [settings, setSettings] = useState(defaultSettings);
-  const [cities, setCities] = useState([]);
-  const [suppliers, setSuppliers] = useState([]);
-  const [postos, setPostos] = useState([]);
-  const [groups, setGroups] = useState([]);
-  const [freightRoutes, setFreightRoutes] = useState([]);
-
-  const fetchData = useCallback(async () => {
-    if (!user) return;
-    setLoading(true);
-
-    try {
-      const [settingsRes, citiesRes, suppliersRes, postosRes, groupsRes, routesRes] = await Promise.all([
-        supabase.from('user_settings').select('settings').eq('user_id', user.id).maybeSingle(),
-        supabase.from('cities').select('*').eq('user_id', user.id),
-        supabase.from('suppliers').select('*').eq('user_id', user.id),
-        supabase.from('postos').select('*, city:cities(id, name)').eq('user_id', user.id),
-        supabase.from('groups').select('*').eq('user_id', user.id),
-        supabase.from('freight_routes').select('*, origin:base_cities!origin_city_id(id, name), destination:cities!destination_city_id(id, name)').eq('user_id', user.id),
-      ]);
-
-      if (settingsRes.error && settingsRes.error.code !== 'PGRST116') throw settingsRes.error;
-      if (citiesRes.error) throw citiesRes.error;
-      if (suppliersRes.error) throw suppliersRes.error;
-      if (postosRes.error) throw postosRes.error;
-      if (groupsRes.error) throw groupsRes.error;
-      if (routesRes.error) throw routesRes.error;
-
-      setSettings(settingsRes.data?.settings || defaultSettings);
-      setCities(citiesRes.data || []);
-      setSuppliers(suppliersRes.data || []);
-      setPostos(postosRes.data || []);
-      setGroups(groupsRes.data || []);
-      setFreightRoutes(routesRes.data || []);
-    } catch (err) {
-      console.error('Error fetching data:', err);
-      toast({
-        title: 'Erro ao carregar dados',
-        description: err.message,
-        variant: 'destructive',
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [user, toast]);
-
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  const {
+    loading,
+    settings,
+    cities,
+    suppliers,
+    postos,
+    groups,
+    freightRoutes,
+    refetch: fetchData,
+  } = useSimulatorData(userId, {
+    onError: (err) => {
+      showErrorToast(toast, { title: 'Erro ao carregar dados', error: err });
+    },
+  });
 
   if (loading) {
     return (
@@ -75,15 +40,20 @@ const Simulator = () => {
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="space-y-6"
+      className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 dark:from-slate-950 dark:via-slate-900 dark:to-slate-900 p-6"
     >
       {/* Header */}
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <Calculator className="w-8 h-8 text-primary" />
+      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-8">
+        <div className="flex items-center gap-4">
+          <div className="relative">
+            <div className="absolute inset-0 bg-gradient-to-br from-cyan-400 to-blue-500 rounded-2xl blur-xl opacity-50 animate-pulse"></div>
+            <div className="relative p-4 bg-gradient-to-br from-cyan-500 via-blue-500 to-indigo-500 rounded-2xl shadow-2xl">
+              <Calculator className="w-10 h-10 text-white" />
+            </div>
+          </div>
           <div>
-            <h1 className="text-3xl font-bold text-foreground">Simulador de Preços</h1>
-            <p className="text-muted-foreground">
+            <h1 className="text-4xl font-black bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 bg-clip-text text-transparent">Simulador de Preços</h1>
+            <p className="text-lg text-slate-600 dark:text-slate-400 mt-1">
               Compare fornecedores, bases e calcule a melhor opção de compra
             </p>
           </div>
@@ -94,6 +64,7 @@ const Simulator = () => {
         </Button>
       </div>
 
+      <div className="max-w-7xl mx-auto">
       {/* Best Prices Comparison Component */}
       <BestPricesComparison
         settings={settings}
@@ -103,6 +74,7 @@ const Simulator = () => {
         groups={groups}
         freightRoutes={freightRoutes}
       />
+      </div>
     </motion.div>
   );
 };

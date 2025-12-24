@@ -3,9 +3,12 @@ import { Badge } from '@/components/ui/badge';
 import { Flag } from 'lucide-react';
 
 const BrandBadge = ({ bandeira, size = 'sm', showIcon = false }) => {
-  if (!bandeira || bandeira === 'bandeira_branca') return null;
-
   const brandConfig = {
+    bandeira_branca: {
+      label: 'CACIQUE',
+      color: 'bg-red-600 hover:bg-red-700 text-white',
+      icon: '⚪'
+    },
     ipiranga: {
       label: 'Ipiranga',
       color: 'bg-blue-600 hover:bg-blue-700 text-white',

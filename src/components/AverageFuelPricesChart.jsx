@@ -28,6 +28,7 @@ const CustomTooltip = ({ active, payload, label }) => {
 
 const AverageFuelPricesChart = ({ selectedBase = 'all', baseCities = [] }) => {
   const { user } = useAuth();
+  const userId = user?.id;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [dailyPrices, setDailyPrices] = useState([]);
@@ -36,7 +37,7 @@ const AverageFuelPricesChart = ({ selectedBase = 'all', baseCities = [] }) => {
   const [chartType, setChartType] = useState('line'); // 'line' or 'bar'
 
   const fetchData = async () => {
-    if (!user) return;
+    if (!userId) return;
     setLoading(true);
     setError(null);
     
@@ -50,7 +51,7 @@ const AverageFuelPricesChart = ({ selectedBase = 'all', baseCities = [] }) => {
         supabase
           .from('daily_prices')
           .select('date, supplier_id, base_city_id, prices')
-          .eq('user_id', user.id)
+          .eq('user_id', userId)
           .gte('date', fromDate)
           .order('date', { ascending: true }),
         supabase
@@ -77,7 +78,7 @@ const AverageFuelPricesChart = ({ selectedBase = 'all', baseCities = [] }) => {
   useEffect(() => {
     fetchData();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, period]);
+  }, [userId, period]);
 
   const filteredDailyPrices = useMemo(() => {
     if (selectedBase === 'all') return dailyPrices;

@@ -13,6 +13,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import BrandBadge from '@/components/ui/BrandBadge';
+import { DatePicker } from '@/components/ui/date-picker';
 import {
   LineChart,
   Line,
@@ -422,21 +423,19 @@ const VolumeAnalytics = () => {
 
             <div>
               <Label className="font-semibold text-slate-700 dark:text-slate-300">Data Início</Label>
-              <input
-                type="date"
-                className="mt-1.5 w-full px-4 py-3 border-2 border-slate-300 dark:border-slate-600 focus:border-blue-500 dark:focus:border-blue-400 shadow-sm h-12 rounded-2xl bg-white dark:bg-slate-800"
+              <DatePicker
                 value={startDate}
-                onChange={e => setStartDate(e.target.value)}
+                onChange={setStartDate}
+                className="mt-1.5 w-full"
               />
             </div>
 
             <div>
               <Label className="font-semibold text-slate-700 dark:text-slate-300">Data Fim</Label>
-              <input
-                type="date"
-                className="mt-1.5 w-full px-4 py-3 border-2 border-slate-300 dark:border-slate-600 focus:border-blue-500 dark:focus:border-blue-400 shadow-sm h-12 rounded-2xl bg-white dark:bg-slate-800"
+              <DatePicker
                 value={endDate}
-                onChange={e => setEndDate(e.target.value)}
+                onChange={setEndDate}
+                className="mt-1.5 w-full"
               />
             </div>
           </div>

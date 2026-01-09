@@ -93,12 +93,15 @@ const PurchaseOrders = () => {
     return invoice;
   };
 
-  const exportToCSV = () => {
+  const exportToPDF = () => {
     if (orders.length === 0) {
       toast({ title: '⚠️ Nenhum pedido para exportar', variant: 'destructive' });
       return;
     }
 
+    // Create a new window for printing
+    const printWindow = window.open('', '_blank');
+    
     const headers = ['Posto', 'Base', 'Combustível', 'Volume', 'Preço/L', 'Preço Efetivo', 'Alvo', 'Faturamento', 'Pagamento', 'Fornecedor'];
     const rows = orders.map(order => [
       order.postos?.name || '-',
@@ -113,16 +116,49 @@ const PurchaseOrders = () => {
       order.suppliers?.name || '-'
     ]);
 
-    const csvContent = [
-      headers.join(','),
-      ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
-    ].join('\n');
+    const htmlContent = `
+      <html>
+        <head>
+          <title>Pedidos do Dia - ${viewDate}</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            h1 { color: #333; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; font-weight: bold; }
+            .text-right { text-align: right; }
+            .date-info { color: #666; margin-bottom: 20px; }
+          </style>
+        </head>
+        <body>
+          <h1>Pedidos do Dia</h1>
+          <div class="date-info">
+            Data: ${new Date(viewDate).toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+          </div>
+          <table>
+            <thead>
+              <tr>
+                ${headers.map(header => `<th>${header}</th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join('')}</tr>`).join('')}
+            </tbody>
+          </table>
+        </body>
+      </html>
+    `;
 
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `pedidos-${viewDate}.csv`;
-    link.click();
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+    printWindow.focus();
+    
+    // Wait for the content to load before printing
+    setTimeout(() => {
+      printWindow.print();
+      printWindow.close();
+    }, 500);
+
     toast({ title: '✅ Exportado com sucesso!' });
   };
 
@@ -154,9 +190,8 @@ const PurchaseOrders = () => {
   const [selectedBrand, setSelectedBrand] = useState('all');
   const [selectedBase, setSelectedBase] = useState('all');
   const [viewDate, setViewDate] = useState(() => {
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    return yesterday.toISOString().split('T')[0];
+    const today = new Date();
+    return today.toISOString().split('T')[0];
   });
 
   // Multi-product entry
@@ -224,6 +259,20 @@ const PurchaseOrders = () => {
       if (settingsRes.error && settingsRes.error.code !== 'PGRST116') throw settingsRes.error;
       if (routesRes.error) throw routesRes.error;
 
+      console.log('📋 Dados carregados:', {
+        postos: postosRes.data?.length || 0,
+        groups: groupsRes.data?.length || 0,
+        suppliers: suppliersRes.data?.length || 0,
+        bases: basesRes.data?.length || 0,
+        groupsWithTargetPrices: groupsRes.data?.filter(g => g.target_prices && Object.keys(g.target_prices).length > 0).length || 0,
+        groups: groupsRes.data?.map(g => ({
+          id: g.id,
+          name: g.name,
+          hasTargetPrices: !!g.target_prices,
+          targetPricesKeys: g.target_prices ? Object.keys(g.target_prices) : []
+        }))
+      });
+      
       setPostos(postosRes.data || []);
       setGroups(groupsRes.data || []);
       setSuppliers(suppliersRes.data || []);
@@ -250,6 +299,20 @@ const PurchaseOrders = () => {
         .eq('order_date', viewDate);
 
       if (error) throw error;
+      
+      console.log('📋 Pedidos carregados do banco:', {
+        count: data?.length || 0,
+        data: data?.map(o => ({
+          id: o.id,
+          target_price: o.target_price,
+          unit_price: o.unit_price,
+          volume: o.volume,
+          daily_financial_cost: o.daily_financial_cost,
+          price_difference: o.price_difference,
+          payment_term_days: o.payment_term_days
+        }))
+      });
+      
       setOrders((data || []).sort((a, b) => {
         // Extract numeric part from order ID (assuming format like "order-1", "order-2", etc.)
         const aNum = parseInt(a.id?.split('-').pop() || a.id || '0');
@@ -277,13 +340,37 @@ const PurchaseOrders = () => {
     }
 
     const groupId = posto.group_ids?.[0];
-    if (!groupId) return null;
+    if (!groupId) {
+      console.log('⚠️ Posto sem grupo:', { stationId, posto: posto.name });
+      return null;
+    }
 
     const group = groups.find(g => g.id === groupId);
-    if (!group?.target_prices) return null;
+    if (!group) {
+      console.log('⚠️ Grupo não encontrado:', { groupId });
+      return null;
+    }
+    
+    if (!group.target_prices) {
+      console.log('⚠️ Grupo sem target_prices:', { groupId, groupName: group.name });
+      return null;
+    }
 
     const key = baseId && baseId !== 'all' ? `${fuelType}_${baseId}` : fuelType;
-    return group.target_prices[key] || group.target_prices[fuelType] || null;
+    const targetPrice = group.target_prices[key] || group.target_prices[fuelType];
+    
+    console.log('🎯 Buscando target_price:', {
+      stationId,
+      fuelType,
+      baseId,
+      supplierId,
+      groupId,
+      groupName: group.name,
+      key,
+      targetPrice
+    });
+    
+    return targetPrice || null;
   }, [postos, groups, suppliers]);
 
   const [dailyPrices, setDailyPrices] = useState([]);
@@ -375,7 +462,8 @@ const PurchaseOrders = () => {
       paymentDays: '0',
       driverName: '',
       vehicleType: '',
-      specificSupplier: ''
+      specificSupplier: '',
+      deliveryDate: ''
     }]);
   };
 
@@ -454,7 +542,10 @@ const PurchaseOrders = () => {
           financial_cost_rate: calc.appliedRate,
           freight_cost: freightCostValue,
           invoice_date: invoiceDate,
-          vehicle_type: entry.vehicleType || null
+          vehicle_type: entry.vehicleType || null,
+          base_city_id: selectedBase,
+          driver_name: entry.driverName || null,
+          delivery_date: entry.deliveryDate || null
         };
 
         if (groupId) {
@@ -526,29 +617,63 @@ const PurchaseOrders = () => {
   }, [orders, selectedBrand, selectedBase]);
 
   const statistics = useMemo(() => {
+    console.log('🔍 Pedidos para calcular KPI:', {
+      filtered: filteredOrders.length,
+      orders: filteredOrders.map(o => ({
+        id: o.id,
+        target_price: o.target_price,
+        unit_price: o.unit_price,
+        volume: o.volume,
+        daily_financial_cost: o.daily_financial_cost,
+        price_difference: o.price_difference,
+        payment_term_days: o.payment_term_days
+      }))
+    });
+
     const incorrect = filteredOrders.filter(o => {
       const targetPrice = o.target_price || getTargetPrice(o.station_id, o.fuel_type, o.base_city_id, o.supplier_id);
-      if (!targetPrice) return false;
+      if (!targetPrice) {
+        console.log('⚠️ Pedido sem target_price:', o.id);
+        return false;
+      }
       
-      const calc = calculatePrice(o.total_cost || (o.unit_price * o.volume * 1000), o.volume, o.payment_term_days);
-      return Math.abs(calc.effectivePrice - targetPrice) > 0.01;
+      // Usar preço efetivo = unit_price - (daily_financial_cost / volume / 1000)
+      const effectivePrice = o.unit_price - (o.daily_financial_cost / (o.volume * 1000));
+      const isIncorrect = Math.abs(effectivePrice - targetPrice) > 0.01;
+      
+      if (isIncorrect) {
+        console.log('🔴 Pedido fora do alvo:', {
+          id: o.id,
+          targetPrice,
+          effectivePrice,
+          difference: effectivePrice - targetPrice,
+          price_difference: o.price_difference
+        });
+      }
+      
+      return isIncorrect;
     });
 
     const totalExtra = incorrect.reduce((sum, o) => {
       const targetPrice = o.target_price || getTargetPrice(o.station_id, o.fuel_type, o.base_city_id, o.supplier_id);
       if (!targetPrice) return sum;
       
-      const calc = calculatePrice(o.total_cost || (o.unit_price * o.volume * 1000), o.volume, o.payment_term_days);
-      const diff = calc.effectivePrice - targetPrice;
-      return sum + (diff * o.volume * 1000);
+      // Usar price_difference do banco (já calculado)
+      return sum + (o.price_difference || 0);
     }, 0);
+
+    console.log('📊 KPI Calculado:', {
+      total: filteredOrders.length,
+      incorrect: incorrect.length,
+      extraCost: totalExtra
+    });
 
     return {
       total: filteredOrders.length,
       incorrect: incorrect.length,
       extraCost: totalExtra
     };
-  }, [filteredOrders, getTargetPrice, financialCostRate]);
+  }, [filteredOrders, getTargetPrice]);
 
   if (loading) {
     return (
@@ -578,12 +703,12 @@ const PurchaseOrders = () => {
           </div>
         </div>
         <Button 
-          onClick={exportToCSV}
+          onClick={exportToPDF}
           className="gap-2 h-12 px-6 text-base font-medium shadow-lg hover:shadow-xl transition-all"
           size="lg"
         >
           <Download className="w-5 h-5" />
-          Exportar CSV
+          Exportar PDF
         </Button>
       </div>
 
@@ -879,6 +1004,15 @@ const PurchaseOrders = () => {
                     />
                   </div>
 
+                  <div>
+                    <Label className="text-sm font-medium mb-2 block">Data de Entrega</Label>
+                    <DatePicker
+                      value={entry.deliveryDate}
+                      onChange={value => updateProductEntry(entry.id, 'deliveryDate', value)}
+                      className="h-12"
+                    />
+                  </div>
+
                   <div className="flex items-end">
                     <Button 
                       variant="destructive" 
@@ -1073,102 +1207,88 @@ const PurchaseOrders = () => {
 
       {/* Orders Table */}
       <Card className="shadow-lg">
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle>Pedidos do Dia</CardTitle>
-              <CardDescription>
-                {new Date(viewDate).toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-              </CardDescription>
+        <CardHeader className="pb-6">
+          <div className="flex items-center justify-between gap-6">
+            <div className="flex items-center gap-4">
+              <div>
+                <CardTitle className="text-2xl font-bold">Pedidos do Dia</CardTitle>
+                <CardDescription className="text-base mt-1">
+                  {new Date(viewDate + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                </CardDescription>
+              </div>
             </div>
-            <Button variant="outline" size="sm" onClick={exportToCSV}>
-              <Download className="w-4 h-4 mr-2" />
-              Exportar CSV
-            </Button>
+            <div className="flex items-center gap-4">
+              <DatePicker
+                value={viewDate}
+                onChange={setViewDate}
+                className="w-44"
+              />
+              <Button variant="outline" size="sm" onClick={exportToPDF}>
+                <Download className="w-4 h-4 mr-2" />
+                Exportar PDF
+              </Button>
+            </div>
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="pt-6">
           <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Posto</TableHead>
-                  <TableHead>Base</TableHead>
-                  <TableHead>Combustível</TableHead>
-                  <TableHead className="text-right">Volume</TableHead>
-                  <TableHead className="text-right">Preço/L</TableHead>
-                  <TableHead className="text-right">Preço Efetivo</TableHead>
-                  <TableHead className="text-right">Alvo</TableHead>
-                  <TableHead className="text-right">Faturamento</TableHead>
-                  <TableHead className="text-right">Pagamento</TableHead>
-                  <TableHead className="text-right">Total</TableHead>
-                  <TableHead className="text-right">Status</TableHead>
-                  <TableHead className="text-right">Ações</TableHead>
+                  <TableHead className="py-3 px-2 whitespace-nowrap">Posto</TableHead>
+                  <TableHead className="py-3 px-2 whitespace-nowrap">Base</TableHead>
+                  <TableHead className="py-3 px-2 whitespace-nowrap">Combustível</TableHead>
+                  <TableHead className="py-3 px-2 text-right whitespace-nowrap">Volume</TableHead>
+                  <TableHead className="py-3 px-2 text-right whitespace-nowrap">Preço/L</TableHead>
+                  <TableHead className="py-3 px-2 text-right whitespace-nowrap">Preço Efetivo</TableHead>
+                  <TableHead className="py-3 px-2 text-right whitespace-nowrap">Faturamento</TableHead>
+                  <TableHead className="py-3 px-2 text-right whitespace-nowrap">Pagamento</TableHead>
+                  <TableHead className="py-3 px-2 text-right whitespace-nowrap">Total</TableHead>
+                  <TableHead className="py-3 px-2 text-right whitespace-nowrap">Ações</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredOrders.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={12} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
                       Nenhum pedido encontrado para esta data
                     </TableCell>
                   </TableRow>
                 ) : (
                   filteredOrders.map((order) => {
                     const calc = calculatePrice(order.total_cost || (order.unit_price * order.volume * 1000), order.volume, order.payment_term_days);
-                    const targetPrice = order.target_price || getTargetPrice(order.station_id, order.fuel_type, order.base_city_id, order.supplier_id);
-                    const isOutOfTarget = targetPrice && Math.abs(calc.effectivePrice - targetPrice) > 0.01;
-                    const priceDiff = targetPrice ? calc.effectivePrice - targetPrice : 0;
 
                     return (
-                      <TableRow key={order.id} className={isOutOfTarget ? 'bg-orange-50 dark:bg-orange-950/20' : ''}>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
+                      <TableRow key={order.id}>
+                        <TableCell className="px-2 whitespace-nowrap">
+                          <div className="flex items-center gap-2 min-w-0">
                             <BrandBadge bandeira={order.postos?.bandeira} size="xs" />
-                            <span className="font-medium">{order.postos?.name}</span>
+                            <span className="font-medium truncate">{order.postos?.name}</span>
                           </div>
                         </TableCell>
-                        <TableCell>
-                          {baseCities.find(b => b.id === order.base_city_id)?.name || 'N/D'}
+                        <TableCell className="py-4 px-2 whitespace-nowrap">
+                          {baseCities.find(b => b.id === order.base_city_id)?.name || 
+                           (order.base_cities && typeof order.base_cities === 'object' ? order.base_cities.name : null) || 
+                           'N/D'}
                         </TableCell>
-                        <TableCell>{settings.fuelTypes?.[order.fuel_type]?.name || order.fuel_type}</TableCell>
-                        <TableCell className="text-right">{order.volume} m³</TableCell>
-                        <TableCell className="text-right font-mono">R$ {order.unit_price.toFixed(4)}</TableCell>
-                        <TableCell className="text-right font-mono font-bold text-green-600">
+                        <TableCell className="px-2 whitespace-nowrap">{settings.fuelTypes?.[order.fuel_type]?.name || order.fuel_type}</TableCell>
+                        <TableCell className="px-2 text-right whitespace-nowrap font-mono">{Math.round(order.volume / 1000)} m³</TableCell>
+                        <TableCell className="px-2 text-right whitespace-nowrap font-mono">R$ {order.unit_price.toFixed(4)}</TableCell>
+                        <TableCell className="px-2 text-right whitespace-nowrap font-mono font-bold text-green-600">
                           R$ {calc.effectivePrice.toFixed(4)}
                         </TableCell>
-                        <TableCell className="text-right font-mono">
-                          {targetPrice ? `R$ ${targetPrice.toFixed(4)}` : 'N/D'}
-                        </TableCell>
-                        <TableCell className="text-right text-xs">
+                        <TableCell className="px-2 text-right whitespace-nowrap text-xs">
                           {order.invoice_date ? new Date(order.invoice_date + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : '-'}
                         </TableCell>
-                        <TableCell className="text-right text-xs font-semibold text-green-600">
+                        <TableCell className="px-2 text-right whitespace-nowrap text-xs font-semibold text-green-600">
                           {order.invoice_date && order.payment_term_days ? 
                             formatPaymentDate(calculatePaymentDate(order.invoice_date, order.payment_term_days))
                             : '-'}
                         </TableCell>
-                        <TableCell className="text-right font-mono font-bold">
-                          R$ {order.total_cost?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        <TableCell className="px-2 text-right whitespace-nowrap font-mono font-bold">
+                          R$ {(order.total_cost / 1000).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                         </TableCell>
-                        <TableCell className="text-right">
-                          {isOutOfTarget ? (
-                            <div className="flex flex-col items-end gap-1">
-                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200">
-                                <AlertTriangle className="w-3 h-3 mr-1" />
-                                +{(priceDiff * 100).toFixed(2)}¢
-                              </span>
-                            </div>
-                          ) : targetPrice ? (
-                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
-                              <Check className="w-3 h-3 mr-1" />
-                              OK
-                            </span>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">Sem alvo</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right">
+                        <TableCell className="px-2 text-right whitespace-nowrap">
                           {deleteConfirmId === order.id ? (
                             <div className="flex gap-1">
                               <Button size="sm" variant="destructive" onClick={() => handleDelete(order.id)} className="h-8 px-2">

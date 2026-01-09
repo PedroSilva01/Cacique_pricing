@@ -6,7 +6,9 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Download, TrendingUp, TrendingDown, DollarSign, Truck, Filter, BarChart3 } from 'lucide-react';
+import { DatePicker } from '@/components/ui/date-picker';
+import { WeekPicker } from '@/components/ui/week-picker';
+import { Download, TrendingUp, TrendingDown, DollarSign, Truck, Filter, BarChart3, AlertTriangle } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { motion } from 'framer-motion';
 
@@ -15,12 +17,35 @@ export default function FinancialDashboard() {
   const { toast } = useToast();
   const userId = user?.id;
 
+  // Função para formatar moeda
+  const formatCurrency = (value) => {
+    const num = parseFloat(value);
+    if (isNaN(num)) return '';
+    return num.toLocaleString('pt-BR', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+  };
+
   const [loading, setLoading] = useState(false);
   const [orders, setOrders] = useState([]);
   const [postos, setPostos] = useState([]);
   const [groups, setGroups] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [settings, setSettings] = useState({});
+  const [priceDeviationAlerts, setPriceDeviationAlerts] = useState([]);
+  
+  // Estados para controle de limites diários
+  const [weeklyLimits, setWeeklyLimits] = useState({});
+  const [selectedWeek, setSelectedWeek] = useState(() => {
+    const now = new Date();
+    const currentDay = now.getDay();
+    const diff = currentDay === 0 ? -6 : 1 - currentDay; // Se domingo, volta 6 dias; se outro, vai para segunda
+    const monday = new Date(now.setDate(diff));
+    return monday.toISOString().split('T')[0];
+  });
+  const [showLimitsModal, setShowLimitsModal] = useState(false);
+  const [editingLimits, setEditingLimits] = useState({});
 
   const [startDate, setStartDate] = useState(() => {
     const date = new Date();
@@ -42,6 +67,134 @@ export default function FinancialDashboard() {
       loadData();
     }
   }, [userId]);
+
+  // Carregar alertas de desvio de preço
+  useEffect(() => {
+    if (!userId || !startDate || !endDate) return;
+    
+    const loadPriceDeviationAlerts = async () => {
+      try {
+        const alerts = [];
+        
+        // Para cada dia no período
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        const currentDate = new Date(start);
+        
+        while (currentDate <= end) {
+          const dateStr = currentDate.toISOString().split('T')[0];
+          
+          // Buscar pedidos do dia
+          const { data: ordersData, error: ordersError } = await supabase
+            .from('purchase_orders')
+            .select(`
+              id,
+              station_id,
+              fuel_type,
+              unit_price,
+              volume,
+              total_cost,
+              order_date,
+              postos(id, name, group_ids),
+              groups(id, name, reference_posto_id)
+            `)
+            .eq('user_id', userId)
+            .eq('order_date', dateStr);
+          
+          if (ordersError) throw ordersError;
+          
+          if (!ordersData || ordersData.length === 0) {
+            currentDate.setDate(currentDate.getDate() + 1);
+            continue;
+          }
+          
+          // Buscar preços do posto de referência para cada grupo
+          for (const order of ordersData) {
+            if (!order.postos?.group_ids || order.postos.group_ids.length === 0) continue;
+            
+            // Encontrar o grupo do posto
+            const groupId = order.postos.group_ids[0];
+            const group = groups.find(g => g.id === groupId);
+            
+            if (!group || !group.reference_posto_id) continue;
+            
+            // Buscar preço do posto de referência para o mesmo combustível
+            const { data: refPriceData, error: refPriceError } = await supabase
+              .from('daily_prices')
+              .select('prices')
+              .eq('date', dateStr)
+              .contains('group_ids', [groupId])
+              .single();
+            
+            if (refPriceError || !refPriceData?.prices) continue;
+            
+            const referencePrice = refPriceData.prices[order.fuel_type];
+            if (!referencePrice) continue;
+            
+            // Calcular desvio
+            const priceDifference = order.unit_price - referencePrice;
+            const deviationPercentage = (priceDifference / referencePrice) * 100;
+            
+            // Considerar alerta se desvio > R$ 0,02 por litro
+            if (priceDifference > 0.02) {
+              alerts.push({
+                id: order.id,
+                postoName: order.postos.name,
+                groupName: group.name,
+                fuelType: order.fuel_type,
+                fuelTypeName: settings.fuelTypes?.[order.fuel_type]?.name || order.fuel_type,
+                unitPrice: order.unit_price,
+                referencePrice: referencePrice,
+                priceDifference: priceDifference,
+                deviationPercentage: deviationPercentage,
+                volume: order.volume,
+                totalCost: order.total_cost,
+                orderDate: order.order_date
+              });
+            }
+          }
+          
+          currentDate.setDate(currentDate.getDate() + 1);
+        }
+        
+        setPriceDeviationAlerts(alerts);
+      } catch (err) {
+        console.log('Erro ao carregar alertas de desvio de preço:', err);
+      }
+    };
+    
+    loadPriceDeviationAlerts();
+  }, [userId, startDate, endDate, groups, settings.fuelTypes]);
+  
+  // Carregar limites diários da semana selecionada
+  useEffect(() => {
+    if (!userId || !selectedWeek) return;
+    
+    const loadWeeklyLimits = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('daily_payment_limits')
+          .select('*')
+          .eq('user_id', userId)
+          .eq('week_date', selectedWeek)
+          .order('day_of_week');
+        
+        if (error) throw error;
+        
+        const limits = {};
+        (data || []).forEach(limit => {
+          limits[limit.day_of_week] = limit.daily_limit;
+        });
+        
+        setWeeklyLimits(limits);
+        setEditingLimits(limits);
+      } catch (err) {
+        console.error('Erro ao carregar limites diários:', err);
+      }
+    };
+    
+    loadWeeklyLimits();
+  }, [userId, selectedWeek]);
 
   const loadData = async () => {
     setLoading(true);
@@ -66,7 +219,42 @@ export default function FinancialDashboard() {
       setLoading(false);
     }
   };
-
+  
+  // Função para salvar limites diários
+  const saveWeeklyLimits = async () => {
+    if (!userId || !selectedWeek) return;
+    
+    try {
+      setLoading(true);
+      
+      // Preparar dados para upsert
+      const limitsData = Object.entries(editingLimits).map(([dayOfWeek, dailyLimit]) => ({
+        user_id: userId,
+        week_date: selectedWeek,
+        day_of_week: parseInt(dayOfWeek),
+        daily_limit: parseFloat(dailyLimit) || 0
+      }));
+      
+      const { error } = await supabase
+        .from('daily_payment_limits')
+        .upsert(limitsData, {
+          onConflict: 'user_id,week_date,day_of_week'
+        });
+      
+      if (error) throw error;
+      
+      setWeeklyLimits(editingLimits);
+      setShowLimitsModal(false);
+      toast({ title: '✅ Limites salvos com sucesso!' });
+    } catch (err) {
+      console.error('Erro ao salvar limites:', err);
+      toast({ title: '❌ Erro ao salvar limites', variant: 'destructive' });
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  // Filtrar pedidos para uso em múltiplos lugares
   const filteredOrders = useMemo(() => {
     return orders.filter(order => {
       const orderDate = new Date(order.order_date);
@@ -83,7 +271,36 @@ export default function FinancialDashboard() {
       return true;
     });
   }, [orders, startDate, endDate, selectedBrand, postos]);
-
+  
+  // Calcular total a pagar por dia da semana
+  const dailyPayments = useMemo(() => {
+    const payments = {
+      0: 0, // domingo
+      1: 0, // segunda
+      2: 0, // terça
+      3: 0, // quarta
+      4: 0, // quinta
+      5: 0, // sexta
+      6: 0  // sábado
+    };
+    
+    filteredOrders.forEach(order => {
+      const orderDate = new Date(order.order_date);
+      const dayOfWeek = orderDate.getDay();
+      const totalCost = order.total_cost || 0;
+      
+      // Se o pagamento cai no sábado (6) ou domingo (0), mas o banco só funciona na segunda,
+      // movemos o pagamento para a segunda-feira (1)
+      let effectiveDayOfWeek = dayOfWeek;
+      if (effectiveDayOfWeek === 0 || effectiveDayOfWeek === 6) {
+        effectiveDayOfWeek = 1; // Segunda-feira
+      }
+      
+      payments[effectiveDayOfWeek] += totalCost;
+    });
+    
+    return payments;
+  }, [filteredOrders]);
   const summary = useMemo(() => {
     let totalVolume = 0;
     let totalValue = 0;
@@ -143,6 +360,17 @@ export default function FinancialDashboard() {
       creditValue
     };
   }, [filteredOrders, postos]);
+  
+  // Dias da semana para exibição (apenas dias úteis para limites)
+  const weekDays = [
+    { key: 1, name: 'Segunda-feira', short: 'Seg', hasLimit: true },
+    { key: 2, name: 'Terça-feira', short: 'Ter', hasLimit: true },
+    { key: 3, name: 'Quarta-feira', short: 'Qua', hasLimit: true },
+    { key: 4, name: 'Quinta-feira', short: 'Qui', hasLimit: true },
+    { key: 5, name: 'Sexta-feira', short: 'Sex', hasLimit: true },
+    { key: 6, name: 'Sábado', short: 'Sáb', hasLimit: false }, // Sem limite - pagamentos vão para segunda
+    { key: 0, name: 'Domingo', short: 'Dom', hasLimit: false }  // Sem limite - pagamentos vão para segunda
+  ];
 
   const exportToCSV = () => {
     const headers = ['Data', 'Posto', 'Combustível', 'Volume (L)', 'Preço/L', 'Valor Total', 'Prazo', 'Custo Financeiro', 'Fornecedor'];
@@ -154,8 +382,8 @@ export default function FinancialDashboard() {
       
       return [
         order.order_date,
-        posto?.nome || 'N/D',
-        order.fuel_type,
+        posto?.name || 'N/D',
+        settings.fuelTypes?.[order.fuel_type]?.name || order.fuel_type || 'N/D',
         order.volume || 0,
         (order.unit_price || 0).toFixed(4),
         ((order.unit_price || 0) * (order.volume || 0)).toFixed(2),
@@ -171,7 +399,6 @@ export default function FinancialDashboard() {
     link.href = URL.createObjectURL(blob);
     link.download = `relatorio_financeiro_${startDate}_${endDate}.csv`;
     link.click();
-
     toast({ title: '✅ Relatório exportado!', description: 'Arquivo CSV baixado com sucesso.' });
   };
 
@@ -210,20 +437,18 @@ export default function FinancialDashboard() {
           <div className="grid md:grid-cols-4 gap-4">
             <div>
               <Label className="font-semibold text-slate-700 dark:text-slate-300">Data Inicial</Label>
-              <Input
-                type="date"
-                className="mt-1.5 border-2 border-slate-300 dark:border-slate-600 focus:border-green-500 dark:focus:border-green-400 shadow-sm h-12 rounded-2xl"
+              <DatePicker
                 value={startDate}
-                onChange={e => setStartDate(e.target.value)}
+                onChange={setStartDate}
+                className="mt-1.5"
               />
             </div>
             <div>
               <Label className="font-semibold text-slate-700 dark:text-slate-300">Data Final</Label>
-              <Input
-                type="date"
-                className="mt-1.5 border-2 border-slate-300 dark:border-slate-600 focus:border-green-500 dark:focus:border-green-400 shadow-sm h-12 rounded-2xl"
+              <DatePicker
                 value={endDate}
-                onChange={e => setEndDate(e.target.value)}
+                onChange={setEndDate}
+                className="mt-1.5"
               />
             </div>
             <div>
@@ -295,6 +520,52 @@ export default function FinancialDashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Alertas de Desvio de Preço */}
+      {priceDeviationAlerts.length > 0 && (
+        <Card className="border border-red-200 bg-red-50 dark:bg-red-950/20">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-red-600" />
+              Alertas de Desvio de Preço no Período
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <p className="font-semibold text-red-700 dark:text-red-300">
+              {priceDeviationAlerts.length} pedido(s) com preço acima da referência (+R$ 0,02/L)
+            </p>
+            <div className="space-y-2 max-h-60 overflow-y-auto">
+              {priceDeviationAlerts.slice(0, 10).map((alert) => (
+                <div key={alert.id} className="p-2 bg-white dark:bg-red-950/40 rounded border border-red-200 dark:border-red-800">
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <p className="font-medium text-red-800 dark:text-red-200">
+                        {alert.postoName} - {alert.fuelTypeName}
+                      </p>
+                      <p className="text-xs text-red-600 dark:text-red-400">
+                        {alert.groupName} • {new Date(alert.orderDate).toLocaleDateString('pt-BR')}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="font-mono text-red-700 dark:text-red-300">
+                        +{alert.deviationPercentage.toFixed(1)}%
+                      </p>
+                      <p className="text-xs text-red-600 dark:text-red-400">
+                        R$ {alert.unitPrice.toFixed(4)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {priceDeviationAlerts.length > 10 && (
+              <p className="text-xs text-red-600 dark:text-red-400">
+                ...e mais {priceDeviationAlerts.length - 10} pedido(s)
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Comparativo À Vista vs Prazo */}
       <Card>
@@ -368,6 +639,276 @@ export default function FinancialDashboard() {
           </div>
         </CardContent>
       </Card>
+      
+      {/* Controle de Limites Diários */}
+      <Card className="border-none shadow-xl bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm rounded-3xl overflow-hidden">
+        <CardHeader className="border-b border-slate-200 dark:border-slate-700 bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <DollarSign className="w-5 h-5 text-green-600" />
+              <CardTitle className="text-xl">Limites Diários de Pagamento</CardTitle>
+            </div>
+            <div className="flex items-center gap-2">
+              <Label className="text-sm font-semibold text-green-700 dark:text-green-300">Semana:</Label>
+              <WeekPicker
+                value={selectedWeek}
+                onChange={(date) => {
+                  if (date) {
+                    // Verificar se é segunda-feira, se não for, encontrar a próxima segunda-feira
+                    const selectedDate = new Date(date);
+                    const dayOfWeek = selectedDate.getDay();
+                    
+                    if (dayOfWeek !== 1) {
+                      // Se não for segunda-feira, encontrar a próxima segunda-feira
+                      const daysUntilMonday = dayOfWeek === 0 ? 1 : (8 - dayOfWeek);
+                      const monday = new Date(selectedDate);
+                      monday.setDate(selectedDate.getDate() + daysUntilMonday);
+                      
+                      const sunday = new Date(monday);
+                      sunday.setDate(monday.getDate() + 6);
+                      
+                      setSelectedWeek(monday.toISOString().split('T')[0]);
+                      
+                      toast({ 
+                        title: '📅 Semana selecionada', 
+                        description: `${monday.toLocaleDateString('pt-BR')} a ${sunday.toLocaleDateString('pt-BR')}` 
+                      });
+                    } else {
+                      // Se já for segunda-feira, usar diretamente
+                      const monday = new Date(date);
+                      const sunday = new Date(monday);
+                      sunday.setDate(monday.getDate() + 6);
+                      
+                      setSelectedWeek(monday.toISOString().split('T')[0]);
+                      
+                      toast({ 
+                        title: '📅 Semana selecionada', 
+                        description: `${monday.toLocaleDateString('pt-BR')} a ${sunday.toLocaleDateString('pt-BR')}` 
+                      });
+                    }
+                  } else {
+                    setSelectedWeek('');
+                  }
+                }}
+                className="w-48 h-8 border-2 border-green-300 dark:border-green-600 focus:border-green-500 dark:focus:border-green-400 text-sm"
+                placeholder="Selecione uma segunda-feira"
+              />
+              <Button
+                onClick={() => setShowLimitsModal(true)}
+                className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 h-8 text-sm"
+              >
+                ⚙️ Configurar
+              </Button>
+            </div>
+          </div>
+          <CardDescription>
+            Controle os limites de pagamento para cada dia da semana e acompanhe os valores a pagar
+            {selectedWeek && (
+              <div className="mt-2">
+                <span className="text-xs text-green-600 dark:text-green-400">
+                  📅 Mostrando dados da semana: {new Date(selectedWeek).toLocaleDateString('pt-BR')} a {
+                    (() => {
+                      const sunday = new Date(selectedWeek);
+                      sunday.setDate(new Date(selectedWeek).getDate() + 6);
+                      return sunday.toLocaleDateString('pt-BR');
+                    })()
+                  }
+                </span>
+              </div>
+            )}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="pt-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+            {weekDays.map(day => {
+              const limit = weeklyLimits[day.key] || 0;
+              const payment = dailyPayments[day.key] || 0;
+              const percentage = limit > 0 ? (payment / limit) * 100 : 0;
+              const isOverLimit = payment > limit;
+              
+              return (
+                <div key={day.key} className={`p-4 rounded-xl border-2 transition-all ${
+                  !day.hasLimit
+                    ? 'bg-gray-100 border-gray-300 dark:bg-gray-800 dark:border-gray-600 opacity-60'
+                    : isOverLimit 
+                      ? 'bg-red-50 border-red-300 dark:bg-red-900/20 dark:border-red-700' 
+                      : payment > 0 
+                        ? 'bg-yellow-50 border-yellow-300 dark:bg-yellow-900/20 dark:border-yellow-700'
+                        : 'bg-gray-50 border-gray-300 dark:bg-gray-900/20 dark:border-gray-700'
+                }`}>
+                  <div className="text-center mb-2">
+                    <div className="font-bold text-lg mb-1">{day.short}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {day.name}
+                      {!day.hasLimit && <span className="block text-orange-600 font-semibold">(Sem limite)</span>}
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    {day.hasLimit && (
+                      <>
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs text-muted-foreground">Limite:</span>
+                          <span className="font-mono text-sm font-bold">R$ {formatCurrency(limit)}</span>
+                        </div>
+                        
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs text-muted-foreground">Pagamentos:</span>
+                          <span className={`font-mono text-sm font-bold ${
+                            isOverLimit ? 'text-red-600' : payment > 0 ? 'text-yellow-600' : 'text-gray-600'
+                          }`}>
+                            R$ {formatCurrency(payment)}
+                          </span>
+                        </div>
+                        
+                        {limit > 0 && (
+                          <div className="w-full bg-gray-200 rounded-full h-2 dark:bg-gray-700">
+                            <div
+                              className={`h-2 rounded-full transition-all ${
+                                isOverLimit ? 'bg-red-500' : payment > 0 ? 'bg-yellow-500' : 'bg-green-500'
+                              }`}
+                              style={{ width: `${Math.min(percentage, 100)}%` }}
+                            />
+                          </div>
+                        )}
+                        
+                        {isOverLimit && (
+                          <div className="text-xs text-red-600 font-semibold text-center mt-1">
+                            ⚠️ Excedido!
+                          </div>
+                        )}
+                      </>
+                    )}
+                    
+                    {!day.hasLimit && (
+                      <div className="text-center">
+                        <div className="text-xs text-muted-foreground">Pagamentos:</div>
+                        <div className="font-mono text-sm font-bold text-orange-600">
+                          R$ {formatCurrency(payment)}
+                        </div>
+                        <div className="text-xs text-orange-600 mt-1">
+                          → Segunda-feira
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          
+          <div className="mt-6 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-xl border-2 border-blue-200 dark:border-blue-800">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="font-bold text-blue-800 dark:text-blue-200 mb-1">Resumo da Semana</h4>
+                <div className="text-sm text-blue-600 dark:text-blue-400">
+                  {new Date(selectedWeek).toLocaleDateString('pt-BR', { 
+                    weekday: 'long', 
+                    year: 'numeric', 
+                    month: 'long', 
+                    day: 'numeric' 
+                  })}
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-sm text-blue-600 dark:text-blue-400">Total do Limite (dias úteis):</div>
+                <div className="font-mono text-xl font-bold text-blue-800 dark:text-blue-200">
+                  R$ {formatCurrency(
+                    Object.entries(weeklyLimits)
+                      .filter(([key]) => weekDays.find(d => d.key === parseInt(key))?.hasLimit)
+                      .reduce((sum, [, limit]) => sum + (limit || 0), 0)
+                  )}
+                </div>
+                <div className="text-sm text-blue-600 dark:text-blue-400 mt-2">Total a Pagar:</div>
+                <div className="font-mono text-xl font-bold text-orange-600 dark:text-orange-400">
+                  R$ {formatCurrency(Object.values(dailyPayments).reduce((sum, payment) => sum + payment, 0))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+      
+      {/* Modal de Configuração de Limites */}
+      {showLimitsModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b border-slate-200 dark:border-slate-700">
+              <div className="flex items-center justify-between">
+                <h3 className="text-2xl font-bold bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent">
+                  ⚙️ Configurar Limites Diários
+                </h3>
+                <Button
+                  variant="ghost"
+                  onClick={() => setShowLimitsModal(false)}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  ✕
+                </Button>
+              </div>
+              <p className="text-sm text-slate-600 dark:text-slate-400 mt-2">
+                Defina os limites de pagamento para cada dia da semana selecionada.
+              </p>
+            </div>
+            
+            <div className="p-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {weekDays.filter(day => day.hasLimit).map(day => (
+                  <div key={day.key} className="space-y-2">
+                    <Label className="font-semibold text-slate-700 dark:text-slate-300">
+                      {day.name}
+                    </Label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 dark:text-slate-400 font-bold text-sm">R$</span>
+                      <Input
+                        type="text"
+                        step="0.01"
+                        min="0"
+                        value={editingLimits[day.key] ? formatCurrency(editingLimits[day.key]) : ''}
+                        onChange={(e) => {
+                          const value = e.target.value.replace(/\D/g, '');
+                          const numValue = parseFloat(value) / 100;
+                          setEditingLimits({
+                            ...editingLimits,
+                            [day.key]: numValue.toString()
+                          });
+                        }}
+                        onBlur={(e) => {
+                          const value = e.target.value.replace(/\D/g, '');
+                          const numValue = parseFloat(value) / 100 || 0;
+                          setEditingLimits({
+                            ...editingLimits,
+                            [day.key]: numValue.toFixed(2)
+                          });
+                        }}
+                        className="pl-12 border-2 border-green-300 dark:border-green-600 focus:border-green-500 dark:focus:border-green-400 h-12 rounded-2xl font-mono"
+                        placeholder="0,00"
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-200 dark:border-slate-700">
+                <Button
+                  variant="outline"
+                  onClick={() => setShowLimitsModal(false)}
+                  className="border-2 border-gray-300 text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-950/20"
+                >
+                  ❌ Cancelar
+                </Button>
+                <Button
+                  onClick={saveWeeklyLimits}
+                  disabled={loading}
+                  className="bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white px-8 py-3 font-bold rounded-2xl"
+                >
+                  {loading ? '💾 Salvando...' : '✅ Salvar Limites'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Charts */}
       <div className="grid md:grid-cols-2 gap-4">
@@ -410,7 +951,7 @@ export default function FinancialDashboard() {
                 return (
                   <div key={fuel} className="space-y-1">
                     <div className="flex justify-between text-sm">
-                      <span className="uppercase font-medium">{fuel}</span>
+                      <span className="font-medium">{settings.fuelTypes?.[fuel]?.name || fuel}</span>
                       <span className="font-bold">{volume.toLocaleString('pt-BR')} L</span>
                     </div>
                     <div className="w-full bg-gray-200 rounded-full h-2">
@@ -461,8 +1002,8 @@ export default function FinancialDashboard() {
                   return (
                     <tr key={order.id} className="border-b hover:bg-muted/50">
                       <td className="p-2">{new Date(order.order_date).toLocaleDateString('pt-BR')}</td>
-                      <td className="p-2">{posto?.nome || 'N/D'}</td>
-                      <td className="p-2 uppercase">{order.fuel_type}</td>
+                      <td className="p-2">{posto?.name || 'N/D'}</td>
+                      <td className="p-2">{settings.fuelTypes?.[order.fuel_type]?.name || order.fuel_type}</td>
                       <td className="p-2 text-right font-mono">{(order.volume || 0).toLocaleString('pt-BR')}</td>
                       <td className="p-2 text-right font-mono">R$ {(order.unit_price || 0).toFixed(4)}</td>
                       <td className="p-2 text-right font-mono font-bold">R$ {totalValue.toFixed(2)}</td>

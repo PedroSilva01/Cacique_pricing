@@ -15,8 +15,10 @@ import { Checkbox } from '@/components/ui/checkbox';
 import BrandBadge from '@/components/ui/BrandBadge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { DatePicker } from '@/components/ui/date-picker';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
+import { defaultSettings } from '@/lib/mockData';
 
 const GroupPrices = () => {
   const { user } = useAuth();
@@ -29,7 +31,7 @@ const GroupPrices = () => {
   const [postos, setPostos] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [baseCities, setBaseCities] = useState([]);
-  const [settings, setSettings] = useState({});
+  const [settings, setSettings] = useState(defaultSettings);
 
   const [selectedGroup, setSelectedGroup] = useState('');
   const [selectedBase, setSelectedBase] = useState('');
@@ -70,7 +72,22 @@ const GroupPrices = () => {
       setPostos(postosRes.data || []);
       setSuppliers(suppliersRes.data || []);
       setBaseCities(basesRes.data || []);
-      setSettings(settingsRes.data?.settings || { fuelTypes: {} });
+
+      const rawSettings = settingsRes.data?.settings || {};
+      const mergedSettings = {
+        ...defaultSettings,
+        ...rawSettings,
+        vehicleTypes: {
+          ...(defaultSettings.vehicleTypes || {}),
+          ...(rawSettings.vehicleTypes || {}),
+        },
+        fuelTypes: {
+          ...(rawSettings.fuelTypes || {}),
+          ...(defaultSettings.fuelTypes || {}),
+        },
+      };
+
+      setSettings(mergedSettings);
     } catch (err) {
       console.error('Erro ao carregar dados:', err);
       showErrorToast(toast, { title: 'Erro ao carregar dados', error: err });
@@ -420,12 +437,10 @@ const GroupPrices = () => {
             </div>
             <div>
               <Label htmlFor="date" className="font-semibold text-slate-700 dark:text-slate-300">Data</Label>
-              <Input
-                id="date"
-                type="date"
-                className="mt-1.5 border-2 border-slate-300 dark:border-slate-600 focus:border-purple-500 dark:focus:border-purple-400 shadow-sm h-12 rounded-2xl"
+              <DatePicker
                 value={selectedDate}
-                onChange={e => setSelectedDate(e.target.value)}
+                onChange={setSelectedDate}
+                className="mt-1.5"
               />
             </div>
           </div>

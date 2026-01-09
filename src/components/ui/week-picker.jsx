@@ -9,19 +9,28 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 
-export function DatePicker({ value, onChange, className, disabled }) {
-  const [date, setDate] = React.useState(value ? new Date(value + 'T00:00:00') : undefined)
+export function WeekPicker({ value, onChange, className, disabled }) {
+  const [date, setDate] = React.useState(() => {
+    if (value) {
+      const [year, month, day] = value.split('-').map(Number)
+      return new Date(Date.UTC(year, month - 1, day))
+    }
+    return undefined
+  })
   const [open, setOpen] = React.useState(false)
 
   React.useEffect(() => {
     if (value) {
-      setDate(new Date(value + 'T00:00:00'))
+      // Usar UTC para evitar problemas de fuso horário
+      const [year, month, day] = value.split('-').map(Number)
+      setDate(new Date(Date.UTC(year, month - 1, day)))
     }
   }, [value])
 
   const handleSelect = (newDate) => {
     if (newDate) {
       setDate(newDate)
+      // Usar UTC para evitar problemas de fuso horário
       const year = newDate.getFullYear()
       const month = String(newDate.getMonth() + 1).padStart(2, '0')
       const day = String(newDate.getDate()).padStart(2, '0')
@@ -37,13 +46,13 @@ export function DatePicker({ value, onChange, className, disabled }) {
           variant="outline"
           disabled={disabled}
           className={cn(
-            "w-full justify-start text-left font-normal h-12 border-2 border-slate-300 dark:border-slate-600 hover:border-blue-400 dark:hover:border-blue-500 rounded-2xl",
+            "w-full justify-start text-left font-normal h-8 border-2 border-green-300 dark:border-green-600 hover:border-green-400 dark:hover:border-green-500 rounded-2xl",
             !date && "text-muted-foreground",
             className
           )}
         >
-          <CalendarIcon className="mr-2 h-5 w-5" />
-          {date ? format(date, "dd/MM/yyyy") : <span>Selecione uma data</span>}
+          <CalendarIcon className="mr-2 h-4 w-4" />
+          {date ? format(date, "dd/MM/yyyy") : <span>Selecione uma segunda-feira</span>}
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-auto p-0 rounded-lg shadow-xl border z-50" align="start" side="bottom" sideOffset={4}>
@@ -52,7 +61,7 @@ export function DatePicker({ value, onChange, className, disabled }) {
             background-color: #dbeafe !important;
             cursor: pointer;
           }
-          .dark .rdp-day:not(.rdp-day_disabled):not(.rdp-day_outside):hover {
+          .dark .rdp-day:not(.rdp_day_disabled):not(.rdp-day_outside):hover {
             background-color: rgb(30 58 138 / 0.3) !important;
           }
           .rdp-day_selected {
@@ -62,6 +71,10 @@ export function DatePicker({ value, onChange, className, disabled }) {
           .rdp-day_selected:hover {
             background-color: #1d4ed8 !important;
           }
+          .rdp-day_disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+          }
         `}</style>
         <div className="p-3">
           <DayPicker
@@ -70,6 +83,23 @@ export function DatePicker({ value, onChange, className, disabled }) {
             onSelect={handleSelect}
             locale={ptBR}
             showOutsideDays={false}
+            disabled={(date) => {
+              // Bloquear todos os dias exceto segundas-feiras
+              return date.getDay() !== 1;
+            }}
+            modifiers={{
+              monday: { dayOfWeek: 1 }
+            }}
+            modifiersStyles={{
+              monday: {
+                backgroundColor: '#dcfce7',
+                color: '#166534',
+                fontWeight: 'bold',
+                borderRadius: '50%'
+              }
+            }}
+            fromYear={2020}
+            toYear={2030}
             components={{
               IconLeft: ({ ...props }) => <ChevronLeft className="h-4 w-4" />,
               IconRight: ({ ...props }) => <ChevronRight className="h-4 w-4" />

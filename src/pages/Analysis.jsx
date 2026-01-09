@@ -25,6 +25,49 @@ const PERIOD_OPTIONS = {
   annual: { days: 365, label: 'Anual (365d)' },
 };
 
+const FilterCard = ({ icon: Icon, title, description, children, className = '', isCollapsed, onToggleCollapse }) => {
+  return (
+    <div className={`rounded-2xl border-2 border-slate-200 dark:border-slate-700 bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-800 dark:to-slate-900 shadow-md p-4 space-y-4 hover:border-blue-300 dark:hover:border-blue-700 transition-all ${className}`}>
+      <div className="flex items-start justify-between">
+        <div className="flex items-start gap-3">
+          <div className="rounded-xl bg-gradient-to-br from-blue-500 to-indigo-500 p-2.5 shadow-lg">
+            <Icon className="w-4 h-4 text-white" />
+          </div>
+          <div>
+            <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">{title}</h3>
+            {description ? <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">{description}</p> : null}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          className="p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+          aria-label={isCollapsed ? 'Expandir' : 'Colapsar'}
+        >
+          {isCollapsed ? (
+            <ChevronDown className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+          ) : (
+            <ChevronUp className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+          )}
+        </button>
+      </div>
+      <AnimatePresence>
+        {!isCollapsed && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            {children}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
 const CustomTooltip = ({ active, payload, label, currency = 'BRL' }) => {
   if (active && payload && payload.length) {
     return (
@@ -260,34 +303,64 @@ const Analysis = () => {
               setOilPeriod(saved.oilPeriod);
             }
 
-            if (Array.isArray(saved.fuelSuppliers) && saved.fuelSuppliers.length > 0) {
-              const valid = saved.fuelSuppliers.filter(id => supplierIds.includes(id));
-              if (valid.length > 0) setFuelSuppliers(valid);
+            if (Array.isArray(saved.fuelSuppliers)) {
+              if (saved.fuelSuppliers.length > 0) {
+                const valid = saved.fuelSuppliers.filter(id => supplierIds.includes(id));
+                if (valid.length > 0) setFuelSuppliers(valid);
+              } else {
+                // If saved array is empty, initialize with all suppliers
+                setFuelSuppliers(supplierIds);
+              }
             }
 
-            if (Array.isArray(saved.variationSuppliers) && saved.variationSuppliers.length > 0) {
-              const valid = saved.variationSuppliers.filter(id => supplierIds.includes(id));
-              if (valid.length > 0) setVariationSuppliers(valid);
+            if (Array.isArray(saved.variationSuppliers)) {
+              if (saved.variationSuppliers.length > 0) {
+                const valid = saved.variationSuppliers.filter(id => supplierIds.includes(id));
+                if (valid.length > 0) setVariationSuppliers(valid);
+              } else {
+                // If saved array is empty, initialize with all suppliers
+                setVariationSuppliers(supplierIds);
+              }
             }
 
-            if (Array.isArray(saved.fuelFuels) && saved.fuelFuels.length > 0) {
-              const valid = saved.fuelFuels.filter(key => availableFuelKeys.includes(key));
-              if (valid.length > 0) setFuelFuels(valid);
+            if (Array.isArray(saved.fuelFuels)) {
+              if (saved.fuelFuels.length > 0) {
+                const valid = saved.fuelFuels.filter(key => availableFuelKeys.includes(key));
+                if (valid.length > 0) setFuelFuels(valid);
+              } else {
+                // If saved array is empty, initialize with all fuels
+                setFuelFuels([...availableFuelKeys]);
+              }
             }
 
-            if (Array.isArray(saved.variationFuels) && saved.variationFuels.length > 0) {
-              const valid = saved.variationFuels.filter(key => availableFuelKeys.includes(key));
-              if (valid.length > 0) setVariationFuels(valid);
+            if (Array.isArray(saved.variationFuels)) {
+              if (saved.variationFuels.length > 0) {
+                const valid = saved.variationFuels.filter(key => availableFuelKeys.includes(key));
+                if (valid.length > 0) setVariationFuels(valid);
+              } else {
+                // If saved array is empty, initialize with all fuels
+                setVariationFuels([...availableFuelKeys]);
+              }
             }
 
-            if (Array.isArray(saved.fuelGroups) && saved.fuelGroups.length > 0) {
-              const valid = saved.fuelGroups.filter(id => groupIds.includes(id));
-              if (valid.length > 0) setFuelGroups(valid);
+            if (Array.isArray(saved.fuelGroups)) {
+              if (saved.fuelGroups.length > 0) {
+                const valid = saved.fuelGroups.filter(id => groupIds.includes(id));
+                if (valid.length > 0) setFuelGroups(valid);
+              } else {
+                // If saved array is empty, initialize with all groups
+                setFuelGroups(groupIds);
+              }
             }
 
-            if (Array.isArray(saved.variationGroups) && saved.variationGroups.length > 0) {
-              const valid = saved.variationGroups.filter(id => groupIds.includes(id));
-              if (valid.length > 0) setVariationGroups(valid);
+            if (Array.isArray(saved.variationGroups)) {
+              if (saved.variationGroups.length > 0) {
+                const valid = saved.variationGroups.filter(id => groupIds.includes(id));
+                if (valid.length > 0) setVariationGroups(valid);
+              } else {
+                // If saved array is empty, initialize with all groups
+                setVariationGroups(groupIds);
+              }
             }
           }
         }
@@ -369,7 +442,7 @@ const Analysis = () => {
   }, [dbData, variationBase, variationSuppliers, variationFuels, variationGroups, supplierBrandMap, selectedBrands]);
 
   const fuelPriceChartData = useMemo(() => {
-      if (!filteredFuelData.length || !suppliers.length || fuelFuels.length === 0 || fuelSuppliers.length === 0) return [];
+      if (!filteredFuelData.length || !suppliers.length) return [];
       
       const supplierMap = new Map(suppliers.map(s => [s.id, s.name]));
       
@@ -465,7 +538,7 @@ const Analysis = () => {
   const oilLineNames = getLineNames(oilPriceChartData);
 
   const variationRankingData = useMemo(() => {
-    if (!filteredVariationData.length || !suppliers.length || variationFuels.length === 0 || variationSuppliers.length === 0) {
+    if (!filteredVariationData.length || !suppliers.length) {
       return [];
     }
 
@@ -898,50 +971,6 @@ const Analysis = () => {
     </div>
   );
 
-  const FilterCard = ({ icon: Icon, title, description, children, className = '', defaultCollapsed = false }) => {
-    const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
-    
-    return (
-      <div className={`rounded-2xl border-2 border-slate-200 dark:border-slate-700 bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-800 dark:to-slate-900 shadow-md p-4 space-y-4 hover:border-blue-300 dark:hover:border-blue-700 transition-all ${className}`}>
-        <div className="flex items-start justify-between">
-          <div className="flex items-start gap-3">
-            <div className="rounded-xl bg-gradient-to-br from-blue-500 to-indigo-500 p-2.5 shadow-lg">
-              <Icon className="w-4 h-4 text-white" />
-            </div>
-            <div>
-              <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">{title}</h3>
-              {description ? <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">{description}</p> : null}
-            </div>
-          </div>
-          <button
-            onClick={() => setIsCollapsed(!isCollapsed)}
-            className="p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-            aria-label={isCollapsed ? 'Expandir' : 'Colapsar'}
-          >
-            {isCollapsed ? (
-              <ChevronDown className="w-4 h-4 text-slate-600 dark:text-slate-400" />
-            ) : (
-              <ChevronUp className="w-4 h-4 text-slate-600 dark:text-slate-400" />
-            )}
-          </button>
-        </div>
-        <AnimatePresence>
-          {!isCollapsed && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              transition={{ duration: 0.2 }}
-              className="overflow-hidden"
-            >
-              {children}
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
-    );
-  };
-
   const [variationFiltersExpanded, setVariationFiltersExpanded] = useState(true);
   const [fuelFiltersExpanded, setFuelFiltersExpanded] = useState(true);
   const [oilFiltersExpanded, setOilFiltersExpanded] = useState(true);
@@ -983,42 +1012,46 @@ const Analysis = () => {
             icon={MapPin}
             title="Escopo da Análise"
             description="Escolha a base de origem e o período utilizado no ranking."
-          className="min-w-[220px]"
-        >
-          <div className="space-y-2">
-            <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Base de carregamento</Label>
-            <Select value={variationBase} onValueChange={setVariationBase}>
-              <SelectTrigger>
-                <SelectValue placeholder="Selecione a base..." />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todas as Bases</SelectItem>
-                {baseOptions.map((option) => (
-                  <SelectItem key={option.id} value={option.id}>{option.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
-            <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Período</Label>
-            <Select value={variationPeriod} onValueChange={setVariationPeriod}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.entries(PERIOD_OPTIONS).map(([key, option]) => (
-                  <SelectItem key={key} value={key}>{option.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </FilterCard>
+            isCollapsed={!variationFiltersExpanded}
+            onToggleCollapse={() => setVariationFiltersExpanded(!variationFiltersExpanded)}
+            className="min-w-[220px]"
+          >
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Base de carregamento</Label>
+              <Select value={variationBase} onValueChange={setVariationBase}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione a base..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todas as Bases</SelectItem>
+                  {baseOptions.map((option) => (
+                    <SelectItem key={option.id} value={option.id}>{option.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Período</Label>
+              <Select value={variationPeriod} onValueChange={setVariationPeriod}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(PERIOD_OPTIONS).map(([key, option]) => (
+                    <SelectItem key={key} value={key}>{option.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </FilterCard>
 
         <FilterCard
           icon={Users}
           title="Fornecedores"
           description="Selecione quais fornecedores terão suas variações comparadas."
           className="min-w-[220px]"
+          isCollapsed={!variationFiltersExpanded}
+          onToggleCollapse={() => setVariationFiltersExpanded(!variationFiltersExpanded)}
         >
           {buildSupplierCheckboxes(supplierOptions, variationSuppliers, setVariationSuppliers, 'variation')}
         </FilterCard>
@@ -1028,6 +1061,8 @@ const Analysis = () => {
           title="Bandeiras"
           description="Filtre fornecedores por bandeira."
           className="min-w-[220px]"
+          isCollapsed={!variationFiltersExpanded}
+          onToggleCollapse={() => setVariationFiltersExpanded(!variationFiltersExpanded)}
         >
           {buildBrandCheckboxes(brandOptions, selectedBrands, setSelectedBrands, 'variation-brands')}
         </FilterCard>
@@ -1037,6 +1072,8 @@ const Analysis = () => {
           title="Combustíveis"
           description="Defina os combustíveis considerados no ranking."
           className="min-w-[220px]"
+          isCollapsed={!variationFiltersExpanded}
+          onToggleCollapse={() => setVariationFiltersExpanded(!variationFiltersExpanded)}
         >
           {buildFuelCheckboxes(fuelOptions, variationFuels, setVariationFuels, 'variation')}
         </FilterCard>
@@ -1045,7 +1082,9 @@ const Analysis = () => {
           icon={Layers}
           title="Grupos de Postos"
           description="Filtre os grupos que recebem o preço do fornecedor."
-          className="sm:col-span-2 xl:col-span-1 min-w-[220px]"
+          className="min-w-[220px]"
+          isCollapsed={!variationFiltersExpanded}
+          onToggleCollapse={() => setVariationFiltersExpanded(!variationFiltersExpanded)}
         >
           {buildGroupCheckboxes(groupOptions, variationGroups, setVariationGroups, 'variation')}
           <p className="text-xs text-muted-foreground">Somente registros vinculados aos grupos selecionados entram no cálculo.</p>
@@ -1053,7 +1092,7 @@ const Analysis = () => {
       </div>
       )}
     </div>
-  );
+          );
 
   const fuelFilters = (
     <div className="space-y-4">
@@ -1092,42 +1131,46 @@ const Analysis = () => {
             icon={MapPin}
             title="Escopo da Série"
             description="Escolha a base e o período para montar a série histórica do gráfico."
-          className="min-w-[220px]"
-        >
-          <div className="space-y-2">
-            <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Base de carregamento</Label>
-            <Select value={fuelBase} onValueChange={setFuelBase}>
-              <SelectTrigger>
-                <SelectValue placeholder="Selecione a base..." />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todas as Bases</SelectItem>
-                {baseOptions.map((option) => (
-                  <SelectItem key={option.id} value={option.id}>{option.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
-            <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Período</Label>
-            <Select value={fuelPeriod} onValueChange={setFuelPeriod}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.entries(PERIOD_OPTIONS).map(([key, option]) => (
-                  <SelectItem key={key} value={key}>{option.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </FilterCard>
+            isCollapsed={!fuelFiltersExpanded}
+            onToggleCollapse={() => setFuelFiltersExpanded(!fuelFiltersExpanded)}
+            className="min-w-[220px]"
+          >
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Base de carregamento</Label>
+              <Select value={fuelBase} onValueChange={setFuelBase}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione a base..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todas as Bases</SelectItem>
+                  {baseOptions.map((option) => (
+                    <SelectItem key={option.id} value={option.id}>{option.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Período</Label>
+              <Select value={fuelPeriod} onValueChange={setFuelPeriod}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(PERIOD_OPTIONS).map(([key, option]) => (
+                    <SelectItem key={key} value={key}>{option.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </FilterCard>
 
         <FilterCard
           icon={Users}
           title="Fornecedores"
           description="Compare a evolução de preço entre diferentes fornecedores."
           className="min-w-[220px]"
+          isCollapsed={!fuelFiltersExpanded}
+          onToggleCollapse={() => setFuelFiltersExpanded(!fuelFiltersExpanded)}
         >
           {buildSupplierCheckboxes(supplierOptions, fuelSuppliers, setFuelSuppliers, 'fuel')}
         </FilterCard>
@@ -1137,6 +1180,8 @@ const Analysis = () => {
           title="Bandeiras"
           description="Limite os fornecedores pela bandeira de origem."
           className="min-w-[220px]"
+          isCollapsed={!fuelFiltersExpanded}
+          onToggleCollapse={() => setFuelFiltersExpanded(!fuelFiltersExpanded)}
         >
           {buildBrandCheckboxes(brandOptions, selectedBrands, setSelectedBrands, 'fuel-brands')}
         </FilterCard>
@@ -1146,6 +1191,8 @@ const Analysis = () => {
           title="Combustíveis"
           description="Selecione os combustíveis visíveis no gráfico."
           className="min-w-[220px]"
+          isCollapsed={!fuelFiltersExpanded}
+          onToggleCollapse={() => setFuelFiltersExpanded(!fuelFiltersExpanded)}
         >
           {buildFuelCheckboxes(fuelOptions, fuelFuels, setFuelFuels, 'fuel')}
         </FilterCard>
@@ -1155,14 +1202,15 @@ const Analysis = () => {
           title="Grupos de Postos"
           description="Mostre apenas os registros aplicados aos grupos desejados."
           className="sm:col-span-2 xl:col-span-1 min-w-[220px]"
+          isCollapsed={!fuelFiltersExpanded}
+          onToggleCollapse={() => setFuelFiltersExpanded(!fuelFiltersExpanded)}
         >
           {buildGroupCheckboxes(groupOptions, fuelGroups, setFuelGroups, 'fuel')}
           <p className="text-xs text-muted-foreground">Os pontos exibidos consideram exclusivamente os grupos selecionados.</p>
         </FilterCard>
       </div>
       )}
-    </div>
-  );
+    </div>);
 
   const oilFilters = (
     <div className="space-y-3">

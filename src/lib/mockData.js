@@ -12,9 +12,12 @@ export const defaultSettings = {
     vanderleia: { name: "Vanderleia", volume: 40000 },
   },
   fuelTypes: {
-    etanol: { name: "Etanol" },
     gasolina_comum: { name: "Gasolina Comum" },
-    diesel_s10: { name: "Diesel S10" },
+    gasolina_aditivada: { name: "Gasolina Aditivada" },
+    etanol: { name: "Etanol" },
+    etanol_aditivado: { name: "Etanol Aditivado" },
+    diesel_s10_aditivado: { name: "Diesel S10 Aditivado" },
+    diesel_s500: { name: "Diesel S500" },
   },
   defaultDestinationPostoId: null,
 };

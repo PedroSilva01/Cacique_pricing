@@ -58,6 +58,7 @@ const SettingsPage = () => {
   const [newBaseCityName, setNewBaseCityName] = useState('');
   const [newCityName, setNewCityName] = useState('');
   const [selectedBaseFilter, setSelectedBaseFilter] = useState('all');
+  const [saving, setSaving] = useState(false);
 
   const [supplierSearchInput, setSupplierSearchInput] = useState('');
   const [postoSearchInput, setPostoSearchInput] = useState('');
@@ -92,10 +93,14 @@ const SettingsPage = () => {
         supabase.from('user_settings').select('settings').eq('user_id', userId).maybeSingle(),
         supabase.from('groups').select('*').eq('user_id', userId).order('name'),
       ]);
-
+      
       if (baseCitiesRes.error) throw baseCitiesRes.error;
       if (citiesRes.error) throw citiesRes.error;
-      if (suppliersRes.error) throw suppliersRes.error;
+      if (suppliersRes.error) {
+        console.error('Erro ao carregar fornecedores:', suppliersRes.error);
+        console.log('Dados de fornecedores:', suppliersRes.data);
+        throw suppliersRes.error;
+      }
       if (postosRes.error) throw postosRes.error;
       if (routesRes.error) throw routesRes.error;
       if (groupsRes.error && groupsRes.error.code !== 'PGRST116') throw groupsRes.error;
@@ -130,9 +135,28 @@ const SettingsPage = () => {
         const bNum = parseInt(b.id?.split('-').pop() || b.id || '0');
         return aNum - bNum;
       }));
-      if (settingsRes.data?.settings) {
-        setSettings(settingsRes.data.settings);
-      }
+
+      const rawSettings = settingsRes.data?.settings || {};
+      const mergedSettings = {
+        ...defaultSettings,
+        ...rawSettings,
+        vehicleTypes: {
+          ...(defaultSettings.vehicleTypes || {}),
+          ...(rawSettings.vehicleTypes || {}),
+        },
+        fuelTypes: {
+          // Usar rawSettings primeiro, depois complementar com defaultSettings apenas para itens que não existem
+          ...(rawSettings.fuelTypes || {}),
+          ...(Object.keys(defaultSettings.fuelTypes || {}).reduce((acc, key) => {
+              if (!rawSettings.fuelTypes || !rawSettings.fuelTypes[key]) {
+                  acc[key] = defaultSettings.fuelTypes[key];
+              }
+              return acc;
+          }, {})),
+        },
+      };
+
+      setSettings(mergedSettings);
     } catch (error) {
       showErrorToast(toast, {
         title: 'Erro ao carregar dados',
@@ -145,19 +169,123 @@ const SettingsPage = () => {
 
   useEffect(() => { fetchData() }, [fetchData]);
 
-  const handleSave = async (tableName, data) => {
+  const handleSave = async (tableName, dataToSave) => {
+    console.log('💾 Salvando dados:', { tableName, dataToSave });
+    
+    if (!userId) return;
+    
+    // Validar nome duplicado para grupos
+    if (tableName === 'groups') {
+      const existingGroup = groups.find(g => 
+        g.name.toLowerCase() === dataToSave.name?.toLowerCase() && 
+        g.id !== dataToSave.id
+      );
+      
+      if (existingGroup) {
+        toast({
+          title: 'Nome duplicado',
+          description: `Já existe um grupo com o nome "${dataToSave.name}". Escolha outro nome.`,
+          variant: 'destructive'
+        });
+        setSaving(false);
+        return;
+      }
+    }
+    
+    setSaving(true);
     try {
-      const { id, ...dataToSave } = data;
       delete dataToSave.cities; 
       delete dataToSave.city;
       delete dataToSave.origin;
       delete dataToSave.destination;
+
+      const sanitizedData = (() => {
+        switch (tableName) {
+          case 'base_cities':
+            return {
+              name: dataToSave.name,
+            };
+          case 'cities':
+            return {
+              name: dataToSave.name,
+              is_base: !!dataToSave.is_base,
+            };
+          case 'groups': {
+            const baseCityId = Array.isArray(dataToSave.base_city_ids)
+              ? dataToSave.base_city_ids[0]
+              : dataToSave.base_city_id;
+
+            return {
+              name: dataToSave.name,
+              base_city_id: baseCityId || null,
+              posto_ids: Array.isArray(dataToSave.posto_ids) ? dataToSave.posto_ids : null,
+              allowed_supplier_ids: Array.isArray(dataToSave.allowed_supplier_ids)
+                ? dataToSave.allowed_supplier_ids
+                : null,
+              allowed_suppliers: Array.isArray(dataToSave.allowed_suppliers) ? dataToSave.allowed_suppliers : null,
+              reference_posto_id: dataToSave.reference_posto_id || null,
+            };
+          }
+          case 'suppliers':
+            return {
+              name: dataToSave.name,
+              city_ids: Array.isArray(dataToSave.city_ids) && dataToSave.city_ids.length > 0 ? dataToSave.city_ids : null,
+              available_products: Array.isArray(dataToSave.available_products) && dataToSave.available_products.length > 0 ? dataToSave.available_products : null,
+              has_credit: !!dataToSave.has_credit,
+              bandeira: dataToSave.bandeira || 'bandeira_branca',
+              payment_term_days: dataToSave.payment_term_days === null ? null : (
+                typeof dataToSave.payment_term_days === 'object' 
+                  ? dataToSave.payment_term_days 
+                  : { min: dataToSave.payment_term_days, max: dataToSave.payment_term_days }
+              ),
+              payment_notes: dataToSave.payment_notes ?? '',
+            };
+          case 'postos': {
+            // Garante que fuel_types é um array e filtra valores inválidos
+            const validFuelTypes = Array.isArray(dataToSave.fuel_types) 
+                ? dataToSave.fuel_types.filter(fuel => 
+                    fuel && 
+                    typeof fuel === 'string' && 
+                    !fuel.startsWith('item_') &&
+                    settings.fuelTypes?.[fuel] !== undefined
+                  )
+                : [];
+
+            return {
+              name: dataToSave.name,
+              city_id: dataToSave.city_id,
+              allowed_supply_cities: Array.isArray(dataToSave.allowed_supply_cities) ? dataToSave.allowed_supply_cities : [],
+              group_ids: Array.isArray(dataToSave.group_ids) ? dataToSave.group_ids : [],
+              is_base: !!dataToSave.is_base,
+              fuel_types: validFuelTypes.length > 0 ? validFuelTypes : null,
+              allowed_suppliers: Array.isArray(dataToSave.allowed_suppliers) ? dataToSave.allowed_suppliers : null,
+            };
+          }
+          case 'freight_routes':
+            return {
+              origin_city_id: dataToSave.origin_city_id,
+              destination_city_id: dataToSave.destination_city_id,
+              costs: dataToSave.costs || {},
+              distance_km: dataToSave.distance_km ?? null,
+            };
+          default:
+            return dataToSave;
+        }
+      })();
       
-      const record = { ...dataToSave, user_id: user.id };
-      if (id) record.id = id;
+      const record = { ...sanitizedData, user_id: user.id };
       
-      const { error, data: savedRecord } = await supabase.from(tableName).upsert(record).select().single();
+      const { error, data: savedRecord } = await supabase
+        .from(tableName)
+        .upsert(record, {
+          onConflict: tableName === 'groups' ? 'user_id,name' : 
+                     tableName === 'postos' ? 'user_id,name' : undefined
+        })
+        .select()
+        .single();
       if (error) throw error;
+      
+      console.log('✅ Registro salvo:', { tableName, savedRecord });
       
       // SINCRONIZAÇÃO DE BANDEIRAS
       // Se salvou um GRUPO, sincronizar bandeira para todos os postos do grupo
@@ -208,6 +336,104 @@ const SettingsPage = () => {
       setModal({ type: null, data: null });
     } catch (error) {
       showErrorToast(toast, { title: 'Erro ao salvar', error });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Função para limpar os fuel_types inválidos dos postos
+  const cleanInvalidFuelTypes = async () => {
+    try {
+      const { data: postos, error } = await supabase
+        .from('postos')
+        .select('id, fuel_types')
+        .eq('user_id', user.id);
+
+      if (error) {
+        console.error('Erro ao buscar postos:', error);
+        toast({ title: 'Erro', description: 'Não foi possível buscar os postos.', variant: 'destructive' });
+        return;
+      }
+
+      const updates = postos
+        .filter(posto => 
+          Array.isArray(posto.fuel_types) && 
+          posto.fuel_types.some(fuel => 
+            typeof fuel !== 'string' || 
+            fuel.startsWith('item_') ||
+            settings.fuelTypes?.[fuel] === undefined
+          )
+        )
+        .map(posto => ({
+          id: posto.id,
+          fuel_types: Array.isArray(posto.fuel_types) 
+            ? posto.fuel_types.filter(fuel => 
+                fuel && 
+                typeof fuel === 'string' && 
+                !fuel.startsWith('item_') &&
+                settings.fuelTypes?.[fuel] !== undefined
+              )
+            : null
+        }));
+
+      if (updates.length > 0) {
+        const { error: updateError } = await supabase
+          .from('postos')
+          .upsert(updates);
+
+        if (updateError) {
+          console.error('Erro ao atualizar postos:', updateError);
+          toast({ title: 'Erro', description: 'Não foi possível atualizar os postos.', variant: 'destructive' });
+        } else {
+          console.log(`${updates.length} postos atualizados com sucesso!`);
+          toast({ 
+            title: 'Sucesso!', 
+            description: `${updates.length} postos foram atualizados e os combustíveis inválidos foram removidos.` 
+          });
+          await fetchData();
+        }
+      } else {
+        toast({ 
+          title: 'Nada a fazer', 
+          description: 'Nenhum posto com combustíveis inválidos foi encontrado.' 
+        });
+      }
+    } catch (error) {
+      console.error('Erro ao limpar combustíveis inválidos:', error);
+      toast({ title: 'Erro', description: 'Ocorreu um erro ao limpar os combustíveis inválidos.', variant: 'destructive' });
+    }
+  };
+
+  // Função para limpar itens item_* do settings.fuelTypes
+  const cleanInvalidFuelTypesFromSettings = async () => {
+    try {
+      const validFuelTypes = Object.entries(settings.fuelTypes || {})
+        .filter(([key]) => !key.startsWith('item_'))
+        .reduce((acc, [key, value]) => ({ ...acc, [key]: value }), {});
+
+      const { error } = await supabase
+        .from('user_settings')
+        .upsert({ 
+          user_id: user.id, 
+          settings: { 
+            ...settings, 
+            fuelTypes: validFuelTypes 
+          } 
+        });
+
+      if (error) {
+        console.error('Erro ao limpar fuelTypes:', error);
+        toast({ title: 'Erro', description: 'Não foi possível limpar os tipos de combustível.', variant: 'destructive' });
+      } else {
+        setSettings(prev => ({ ...prev, fuelTypes: validFuelTypes }));
+        toast({ 
+          title: 'Sucesso!', 
+          description: 'Itens inválidos removidos dos tipos de combustível.' 
+        });
+      }
+    } catch (error) {
+      console.error('Erro ao limpar fuelTypes:', error);
+      toast({ title: 'Erro', description: 'Ocorreu um erro ao limpar os tipos de combustível.', variant: 'destructive' });
     }
   };
 
@@ -386,7 +612,7 @@ const SettingsPage = () => {
 
   const noCities = cities.length === 0;
 
-  const baseFilterId = selectedBaseFilter !== 'all' ? Number(selectedBaseFilter) : null;
+  const baseFilterId = selectedBaseFilter !== 'all' ? selectedBaseFilter : null;
 
   // Debounce dos filtros de busca para evitar recomputar listas a cada tecla
   useEffect(() => {
@@ -549,6 +775,31 @@ const SettingsPage = () => {
           </div>
         </div>
 
+        {/* Botão de Limpeza de Dados Inválidos */}
+        <div className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm rounded-2xl border-2 border-slate-200 dark:border-slate-700 shadow-lg mb-6">
+          <div className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">🧹 Manutenção de Dados</h2>
+                <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">Remova combustíveis inválidos dos postos cadastrados</p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={async () => {
+                  if (confirm('Tem certeza que deseja limpar todos os combustíveis inválidos? Esta ação removerá entradas como "item_*" dos postos e das configurações de combustíveis.')) {
+                    await cleanInvalidFuelTypes();
+                    await cleanInvalidFuelTypesFromSettings();
+                  }
+                }}
+                className="border-2 border-orange-300 text-orange-700 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-400 dark:hover:bg-orange-950/20 font-semibold shadow-md hover:shadow-lg transition-all rounded-xl"
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Limpar Combustíveis Inválidos
+              </Button>
+            </div>
+          </div>
+        </div>
+
         {/* Seções de Configuração */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Cidades Base */}
@@ -643,7 +894,7 @@ const SettingsPage = () => {
                   Nenhuma cidade destino cadastrada
                 </div>
               ) : (
-                <div className="divide-y divide-slate-200 dark:divide-slate-700">
+                <div className="divide-y divide-slate-200 dark:border-slate-700">
                   {cities.map(city => (
                     <div key={city.id} className="p-3 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
                       <div className="flex items-center justify-between">
@@ -841,7 +1092,7 @@ const SettingsPage = () => {
                   </h3>
                 </div>
                 <Button
-                  onClick={() => setModal({ type: 'posto', data: { name: '', city_id: null, allowed_supply_cities: [], group_ids: [], is_base: false } })}
+                  onClick={() => setModal({ type: 'posto', data: { name: '', city_id: null, allowed_supply_cities: [], group_ids: [], fuel_types: [], is_base: false } })}
                   className="bg-blue-600 hover:bg-blue-700 h-8 px-3 text-xs flex-shrink-0"
                   disabled={noCities}
                 >
@@ -1010,6 +1261,7 @@ const SettingsPage = () => {
       </div>
 
       <AnimatePresence>
+        {modal.type === 'base_city' && <BaseCityModal data={modal.data} onClose={() => setModal({ type: null })} onSave={(d) => handleSave('base_cities', d)} />}
         {modal.type === 'city' && <CityModal data={modal.data} onClose={() => setModal({ type: null })} onSave={(d) => handleSave('cities', d)} />}
         {modal.type === 'group' && <GroupModal data={modal.data} baseCities={baseCities} postos={postos} suppliers={suppliers} onClose={() => setModal({ type: null })} onSave={(d) => handleSave('groups', d)} />}
         {modal.type === 'supplier' && <SupplierModal data={modal.data} baseCities={baseCities} settings={settings} onClose={() => setModal({ type: null })} onSave={(d) => handleSave('suppliers', d)} />}
@@ -1032,7 +1284,7 @@ const SettingsPage = () => {
   );
 };
 
-const ModalWrapper = ({ children, title, onClose, onSave, data, wide }) => (
+const ModalWrapper = ({ children, title, onClose, onSave, onSaveCurrent, data, wide }) => (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
         <motion.div initial={{ y: 50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 50, opacity: 0 }} className={`bg-white rounded-lg shadow-xl w-full ${wide ? 'max-w-2xl' : 'max-w-md'} flex flex-col max-h-[90vh]`} onClick={e => e.stopPropagation()}>
             <header className="p-4 border-b border-slate-200 dark:border-slate-700 bg-gray-50 rounded-t-lg">
@@ -1041,17 +1293,32 @@ const ModalWrapper = ({ children, title, onClose, onSave, data, wide }) => (
             <main className="p-4 space-y-4 overflow-y-auto flex-1">{children}</main>
             <footer className="p-4 border-t border-gray-200 flex justify-end gap-2 bg-gray-50 rounded-b-lg">
                 <Button variant="ghost" onClick={onClose} className="text-slate-600 dark:text-slate-400 hover:text-gray-800">Cancelar</Button>
-                <Button onClick={() => onSave(data)} className="bg-blue-600 hover:bg-blue-700">
+                <Button onClick={() => onSaveCurrent ? onSaveCurrent() : onSave(data)} className="bg-blue-600 hover:bg-blue-700">
                     <Save className="w-4 h-4 mr-2" /> Salvar
                 </Button>
             </footer>
         </motion.div>
     </motion.div>
 );
+
+const BaseCityModal = ({ data, onClose, onSave }) => {
+  const [d, setD] = useState(data);
+  return (
+    <ModalWrapper title={d.id ? "Editar Cidade Base" : "Nova Cidade Base"} data={d} onClose={onClose} onSave={onSave} onSaveCurrent={() => onSave(d)}>
+      <div className="space-y-3">
+        <div>
+          <Label>Nome da Cidade Base</Label>
+          <Input placeholder="Ex: Teresina" value={d.name || ''} onChange={e => setD({ ...d, name: e.target.value })} />
+        </div>
+      </div>
+    </ModalWrapper>
+  );
+};
+
 const CityModal = ({ data, onClose, onSave }) => { 
   const [d, setD] = useState(data); 
   return (
-    <ModalWrapper title={d.id ? "Editar Cidade" : "Nova Cidade"} data={d} onClose={onClose} onSave={onSave}>
+    <ModalWrapper title={d.id ? "Editar Cidade" : "Nova Cidade"} data={d} onClose={onClose} onSave={onSave} onSaveCurrent={() => onSave(d)}>
       <div className="space-y-3">
         <div>
           <Label>Nome da Cidade</Label>
@@ -1070,6 +1337,11 @@ const GroupModal = ({ data, baseCities = [], postos = [], suppliers = [], onClos
     const onPostoToggle = (id, checked) => setD({ ...d, posto_ids: checked ? [...(d.posto_ids || []), id] : (d.posto_ids || []).filter(i => i !== id) });
     const onBaseCityToggle = (id, checked) => setD({ ...d, base_city_ids: checked ? [...(d.base_city_ids || []), id] : (d.base_city_ids || []).filter(i => i !== id) });
     const onSupplierToggle = (id, checked) => setD({ ...d, allowed_supplier_ids: checked ? [...(d.allowed_supplier_ids || []), id] : (d.allowed_supplier_ids || []).filter(i => i !== id) });
+    
+    // Filtrar apenas postos que estão no grupo para seleção de referência
+    const availableReferencePostos = postos.filter(posto => 
+        (d.posto_ids || []).includes(posto.id)
+    );
 
     const bandeiras = [
         { value: 'bandeira_branca', label: 'Bandeira Branca / Independente' },
@@ -1079,7 +1351,7 @@ const GroupModal = ({ data, baseCities = [], postos = [], suppliers = [], onClos
         { value: 'federal', label: 'Federal' }
     ];
 
-    return <ModalWrapper title={d.id ? "Editar Grupo" : "Novo Grupo"} data={d} onClose={onClose} onSave={onSave} wide>
+    return <ModalWrapper title={d.id ? "Editar Grupo" : "Novo Grupo"} data={d} onClose={onClose} onSave={onSave} onSaveCurrent={() => onSave(d)} wide>
         <div className="grid grid-cols-2 gap-4">
             <div>
                 <Label>Nome do Grupo</Label>
@@ -1099,23 +1371,96 @@ const GroupModal = ({ data, baseCities = [], postos = [], suppliers = [], onClos
         <MultiSelectCheckbox title="Fornecedores Permitidos" options={suppliers} selected={d.allowed_supplier_ids} onToggle={onSupplierToggle} description="Selecione quais fornecedores os postos deste grupo podem comprar" />
         <MultiSelectCheckbox title="Bases de Carregamento" options={baseCities} selected={d.base_city_ids} onToggle={onBaseCityToggle} />
         <MultiSelectCheckbox title="Postos do Grupo" options={postos} selected={d.posto_ids} onToggle={onPostoToggle} />
+        
+        {/* Seção de Posto de Referência */}
+        {d.id && availableReferencePostos.length > 0 && (
+            <div className="mt-6 p-6 bg-gradient-to-r from-purple-50 to-pink-50 dark:from-purple-900/20 dark:to-pink-900/20 rounded-xl border-2 border-purple-200 dark:border-purple-800">
+                <div className="flex items-center gap-2 mb-4">
+                    <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg flex items-center justify-center">
+                        <span className="text-white font-bold text-sm">🎯</span>
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-purple-800 dark:text-purple-200">Posto de Referência</h3>
+                        <p className="text-sm text-purple-600 dark:text-purple-400">Selecione qual posto servirá como referência de preços para este grupo</p>
+                    </div>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <Label className="text-sm font-semibold text-purple-700 dark:text-purple-300">Posto de Referência</Label>
+                        <Select value={d.reference_posto_id || null} onValueChange={v => setD({ ...d, reference_posto_id: v })}>
+                            <SelectTrigger className="mt-1 border-2 border-purple-300 dark:border-purple-600 focus:border-purple-500 dark:focus:border-purple-400">
+                                <SelectValue placeholder="Selecione o posto de referência..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value={null}>Nenhum posto de referência</SelectItem>
+                                {availableReferencePostos.map(posto => (
+                                    <SelectItem key={posto.id} value={posto.id}>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-lg">⛽</span>
+                                            <span>{posto.name}</span>
+                                        </div>
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        <p className="text-xs text-purple-600 dark:text-purple-400 mt-1">
+                            Os preços deste posto serão usados como referência para todos os outros postos do grupo
+                        </p>
+                    </div>
+                </div>
+            </div>
+        )}
     </ModalWrapper>; 
 };
 
-const MultiSelectCheckbox = ({ title, options, selected, onToggle, description }) => (
-    <div>
-        <Label className="font-semibold">{title}</Label>
-        {description && <p className="text-xs text-muted-foreground mt-1">{description}</p>}
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-2 p-4 border rounded-md bg-background">
-            {options.map(option => (
-                <div key={option.id} className="flex items-center space-x-2">
-                    <Checkbox id={`opt-${option.id}`} checked={(selected || []).includes(option.id)} onCheckedChange={v => onToggle(option.id, v)} />
-                    <label htmlFor={`opt-${option.id}`} className="text-sm">{option.name}</label>
-                </div>
-            ))}
+const MultiSelectCheckbox = ({ title, options, selected, onToggle, description, className }) => {
+    // Normalizar IDs e remover duplicatas de combustíveis
+    const normalizedOptions = options.reduce((acc, option) => {
+        // Para combustíveis, remover prefixo item_ e usar ID padrão
+        let normalizedId = option.id;
+        let normalizedName = option.name;
+        
+        // Mapeamento de IDs item_ para IDs padrão
+        const itemFuelMap = {
+            'item_1761651166334': 'diesel_s10_aditivado',
+            'item_1761651181190': 'gasolina_aditivada', 
+            'item_1761651189822': 'etanol_aditivado',
+            'item_1761651200215': 'diesel_s500'
+        };
+        
+        if (itemFuelMap[option.id]) {
+            normalizedId = itemFuelMap[option.id];
+        }
+        
+        // Verificar se já existe este combustível normalizado
+        const existingIndex = acc.findIndex(item => 
+            item.id === normalizedId || 
+            (itemFuelMap[option.id] && item.id === itemFuelMap[option.id])
+        );
+        
+        if (existingIndex === -1) {
+            acc.push({ ...option, id: normalizedId });
+        }
+        
+        return acc;
+    }, []);
+    
+    return (
+        <div>
+            <Label className="font-semibold">{title}</Label>
+            {description && <p className="text-xs text-muted-foreground mt-1">{description}</p>}
+            <div className={`grid grid-cols-2 md:grid-cols-3 gap-2 mt-2 p-4 border rounded-md bg-background ${className || ''}`}>
+                {normalizedOptions.map(option => (
+                    <div key={option.id} className="flex items-center space-x-2">
+                        <Checkbox id={`opt-${option.id}`} checked={(selected || []).includes(option.id)} onCheckedChange={v => onToggle(option.id, v)} />
+                        <label htmlFor={`opt-${option.id}`} className="text-sm">{option.name}</label>
+                    </div>
+                ))}
+            </div>
         </div>
-    </div>
-);
+    );
+};
 
 const SupplierModal = ({ data, baseCities, settings, onClose, onSave }) => { 
     const [d, setD] = useState(data); 
@@ -1131,7 +1476,7 @@ const SupplierModal = ({ data, baseCities, settings, onClose, onSave }) => {
         { value: 'federal', label: 'Federal' }
     ];
 
-    return <ModalWrapper title={d.id ? "Editar Fornecedor" : "Novo Fornecedor"} data={d} onClose={onClose} onSave={onSave} wide>
+    return <ModalWrapper title={d.id ? "Editar Fornecedor" : "Novo Fornecedor"} data={d} onClose={onClose} onSave={onSave} onSaveCurrent={() => onSave(d)} wide>
         <div className="grid grid-cols-2 gap-4">
             <div>
                 <Label>Nome do Fornecedor</Label>
@@ -1164,18 +1509,44 @@ const SupplierModal = ({ data, baseCities, settings, onClose, onSave }) => {
                         </label>
                     </div>
                 </div>
-                <div>
+                <div className="col-span-1">
                     <Label>Prazo (dias)</Label>
-                    <Input
-                        type="number"
-                        min="0"
-                        placeholder="Ex: 7, 15, 21"
-                        value={d.payment_term_days ?? ''}
-                        onChange={e => setD({
-                            ...d,
-                            payment_term_days: e.target.value === '' ? null : parseInt(e.target.value, 10) || 0,
-                        })}
-                    />
+                    <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                            <Input
+                                type="number"
+                                min="0"
+                                placeholder="Mínimo"
+                                value={d.payment_term_days?.min ?? (typeof d.payment_term_days === 'number' ? d.payment_term_days : '')}
+                                onChange={e => setD({
+                                    ...d,
+                                    payment_term_days: {
+                                        ...d.payment_term_days,
+                                        min: e.target.value === '' ? null : parseInt(e.target.value, 10) || 0,
+                                    },
+                                })}
+                                className="flex-1"
+                            />
+                            <span className="text-sm text-muted-foreground">até</span>
+                            <Input
+                                type="number"
+                                min="0"
+                                placeholder="Máximo"
+                                value={d.payment_term_days?.max ?? (typeof d.payment_term_days === 'number' ? d.payment_term_days : '')}
+                                onChange={e => setD({
+                                    ...d,
+                                    payment_term_days: {
+                                        ...d.payment_term_days,
+                                        max: e.target.value === '' ? null : parseInt(e.target.value, 10) || 0,
+                                    },
+                                })}
+                                className="flex-1"
+                            />
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                            Ex: 1 a 3 dias, 7 a 15 dias, etc.
+                        </p>
+                    </div>
                 </div>
                 <div className="col-span-3">
                     <Label>Observações de pagamento</Label>
@@ -1194,7 +1565,20 @@ const PostoModal = ({ data, baseCities = [], cities, groups, suppliers = [], set
     const [d, setD] = useState(data); 
     const onSupplyCityToggle = (id, checked) => setD({ ...d, allowed_supply_cities: checked ? [...(d.allowed_supply_cities || []), id] : (d.allowed_supply_cities || []).filter(i => i !== id) });
     const onGroupToggle = (id, checked) => setD({ ...d, group_ids: checked ? [...(d.group_ids || []), id] : (d.group_ids || []).filter(i => i !== id) });
-    const onFuelToggle = (key, checked) => setD({ ...d, fuel_types: checked ? [...(d.fuel_types || []), key] : (d.fuel_types || []).filter(i => i !== key) });
+    const onFuelToggle = (key, checked) => {
+        setD(prev => {
+            const currentFuels = Array.isArray(prev.fuel_types) ? prev.fuel_types : [];
+            const newFuels = checked
+                ? [...currentFuels, key]
+                : currentFuels.filter(f => f !== key);
+            
+            // Garante que não há duplicados
+            return { 
+                ...prev, 
+                fuel_types: [...new Set(newFuels)] 
+            };
+        });
+    };
 
     const bandeiras = [
         { value: 'bandeira_branca', label: 'Bandeira Branca' },
@@ -1202,11 +1586,6 @@ const PostoModal = ({ data, baseCities = [], cities, groups, suppliers = [], set
         { value: 'shell', label: 'Shell' },
         { value: 'vibra', label: 'Vibra' }
     ];
-
-    const fuelOptions = Object.keys(settings.fuelTypes || {}).map(key => ({
-        id: key,
-        name: settings.fuelTypes[key].name
-    }));
 
     // Calcular fornecedores permitidos baseado nos grupos selecionados
     const allowedSupplierIds = new Set();
@@ -1218,7 +1597,7 @@ const PostoModal = ({ data, baseCities = [], cities, groups, suppliers = [], set
     });
     const allowedSuppliers = suppliers.filter(s => allowedSupplierIds.has(s.id));
 
-    return <ModalWrapper title={d.id ? "Editar Posto" : "Novo Posto"} data={d} onClose={onClose} onSave={onSave} wide>
+    return <ModalWrapper title={d.id ? "Editar Posto" : "Novo Posto"} data={d} onClose={onClose} onSave={onSave} onSaveCurrent={() => onSave(d)} wide>
         <div className="grid grid-cols-2 gap-4">
             <div><Label>Nome do Posto</Label><Input placeholder="Ex: Posto Cacique 10" value={d.name || ''} onChange={e => setD({ ...d, name: e.target.value })} /></div>
             <div><Label>Cidade de Localização</Label><Select value={d.city_id || ''} onValueChange={v => setD({ ...d, city_id: v })}><SelectTrigger><SelectValue placeholder="Selecione..." /></SelectTrigger><SelectContent>{cities.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent></Select></div>
@@ -1234,7 +1613,18 @@ const PostoModal = ({ data, baseCities = [], cities, groups, suppliers = [], set
                 </Select>
             </div>
         </div>
-        <MultiSelectCheckbox title="Combustíveis Vendidos" options={fuelOptions} selected={d.fuel_types || []} onToggle={onFuelToggle} />
+        <MultiSelectCheckbox 
+            title="Combustíveis Vendidos" 
+            options={Object.entries(settings.fuelTypes || {})
+                .filter(([key]) => !key.startsWith('item_'))
+                .map(([key, value]) => ({
+                    id: key,
+                    name: value.name
+                }))} 
+            selected={Array.isArray(d.fuel_types) ? d.fuel_types : []} 
+            onToggle={onFuelToggle} 
+            className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2"
+        />
         <MultiSelectCheckbox title="Grupos do Posto" options={groups} selected={d.group_ids} onToggle={onGroupToggle} />
         <MultiSelectCheckbox title="Bases de Abastecimento Permitidas" options={baseCities} selected={d.allowed_supply_cities} onToggle={onSupplyCityToggle} />
         
@@ -1278,7 +1668,7 @@ const RouteModal = ({ data, baseCities = [], cities, settings, onClose, onSave }
         setD({ ...d, costs: { ...d.costs, [k]: isNaN(numValue) ? 0 : numValue }});
     };
 
-    return <ModalWrapper title={d.id ? "Editar Rota" : "Nova Rota"} data={d} onClose={onClose} onSave={onSave} wide>
+    return <ModalWrapper title={d.id ? "Editar Rota" : "Nova Rota"} data={d} onClose={onClose} onSave={onSave} onSaveCurrent={() => onSave(d)} wide>
         <div className="grid grid-cols-2 gap-4">
             <div>
                 <Label>Origem (Base)</Label>

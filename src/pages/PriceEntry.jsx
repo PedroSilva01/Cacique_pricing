@@ -96,7 +96,7 @@ const PriceEntry = () => {
 
     setLoadingRecentPrices(true);
     try {
-      const itemsPerPage = 25; // Limite de itens processados por página
+      const itemsPerPage = 7; // Limite de itens processados por página
 
       // Buscar TODOS os registros da data para processar
       const { data, error } = await supabase
@@ -425,7 +425,10 @@ const PriceEntry = () => {
         const fuelName = settings.fuelTypes[fuelKey]?.name || fuelKey;
         toast({
           title: '🔄 Preço mantido',
-          description: `${fuelName}: R$ ${lastValidPrice.toFixed(4)} (desde ${new Date(originalDate).toLocaleDateString('pt-BR')})`,
+          description: `${fuelName}: R$ ${lastValidPrice.toFixed(4)} (desde ${(() => {
+                              const [year, month, day] = originalDate.split('-');
+                              return `${day.padStart(2, '0')}/${month.padStart(2, '0')}/${year}`;
+                            })()})`,
         });
       } else {
         const fuelName = settings.fuelTypes[fuelKey]?.name || fuelKey;
@@ -481,7 +484,10 @@ const PriceEntry = () => {
         setPrices(data.prices || {});
         toast({
           title: 'Últimos preços carregados',
-          description: `Baseados no lançamento de ${new Date(data.date + 'T00:00:00').toLocaleDateString('pt-BR')}`,
+          description: `Baseados no lançamento de ${(() => {
+                            const [year, month, day] = data.date.split('-');
+                            return `${day.padStart(2, '0')}/${month.padStart(2, '0')}/${year}`;
+                          })()}`,
         });
       } else {
         toast({
@@ -828,7 +834,10 @@ const PriceEntry = () => {
                           {isMaintained && (
                             <span className="text-xs bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 px-2 py-0.5 rounded-full border border-orange-300 dark:border-orange-700 flex items-center gap-1">
                               <AlertTriangle className="w-3 h-3" />
-                              Mantido desde {new Date(isMaintained.date).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
+                              Mantido desde {(() => {
+                              const [year, month, day] = isMaintained.date.split('-');
+                              return `${day.padStart(2, '0')}/${month.padStart(2, '0')}/${year}`;
+                            })()}
                             </span>
                           )}
                         </Label>
@@ -1138,7 +1147,10 @@ const PriceEntry = () => {
                             {settings.fuelTypes[item.fuelType]?.name || item.fuelType}
                           </p>
                           <p className="text-sm text-slate-500 dark:text-slate-500">
-                            {new Date(item.date).toLocaleDateString('pt-BR')}
+                            {(() => {
+                              const [year, month, day] = item.date.split('-');
+                              return `${day.padStart(2, '0')}/${month.padStart(2, '0')}/${year}`;
+                            })()}
                           </p>
                         </div>
                         <div className="text-right">
@@ -1202,7 +1214,10 @@ const PriceEntry = () => {
             <div className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-2xl border-2 border-blue-300 dark:border-blue-700">
               <Label className="text-sm font-bold text-blue-700 dark:text-blue-300">📅 Data</Label>
               <p className="font-bold text-2xl text-blue-900 dark:text-blue-100 mt-1">
-                {date ? new Date(date + 'T00:00:00').toLocaleDateString('pt-BR', { dateStyle: 'full' }) : '-'}
+                {date ? (() => {
+                  const [year, month, day] = date.split('-');
+                  return `${day.padStart(2, '0')}/${month.padStart(2, '0')}/${year}`;
+                })() : '-'}
               </p>
             </div>
 

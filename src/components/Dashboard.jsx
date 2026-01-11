@@ -100,7 +100,8 @@ const Dashboard = ({ fuelData, loading, settings, setSettings, onGenerateReport 
         return true;
     }
     const supplier = settings.suppliers.find(s => s.name === station.name);
-    return supplier && supplier.brand === selectedBrand;
+    // CORRIGIDO: usar bandeira em vez de brand (propriedade correta do banco)
+    return supplier && supplier.bandeira === selectedBrand;
   });
 
   return (
@@ -165,7 +166,7 @@ const Dashboard = ({ fuelData, loading, settings, setSettings, onGenerateReport 
 
       {results && (
         <>
-          <ResultsDisplay results={results} selectedFuel={selectedFuel} />
+          <ResultsDisplay results={results} selectedFuel={selectedFuel} fuelTypes={settings.fuelTypes} />
           <ChartsSection results={results} />
         </>
       )}

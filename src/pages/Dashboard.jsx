@@ -66,14 +66,86 @@ const Dashboard = () => {
             });
         },
     });
+
+    // Subscription realtime para Dashboard - múltiplas tabelas críticas
+    useEffect(() => {
+        if (!userId) return;
+
+        console.log('🔄 Dashboard: Configurando subscriptions realtime...');
+        
+        // Subscription para daily_prices (preços em tempo real)
+        const dailyPricesSubscription = supabase
+            .channel('dashboard_daily_prices')
+            .on('postgres_changes', {
+                event: '*',
+                schema: 'public', 
+                table: 'daily_prices'
+            }, (payload) => {
+                console.log('🔄 Dashboard: daily_prices update:', payload);
+                refetchDashboardData();
+            })
+            .subscribe();
+
+        // Subscription para groups (configurações de grupos)
+        const groupsSubscription = supabase
+            .channel('dashboard_groups')
+            .on('postgres_changes', {
+                event: '*',
+                schema: 'public',
+                table: 'groups'
+            }, (payload) => {
+                console.log('🔄 Dashboard: groups update:', payload);
+                refetchDashboardData();
+            })
+            .subscribe();
+
+        // Subscription para postos (alterações em postos)
+        const postosSubscription = supabase
+            .channel('dashboard_postos')
+            .on('postgres_changes', {
+                event: '*',
+                schema: 'public',
+                table: 'postos'
+            }, (payload) => {
+                console.log('🔄 Dashboard: postos update:', payload);
+                refetchDashboardData();
+            })
+            .subscribe();
+
+        // Subscription para suppliers (fornecedores)
+        const suppliersSubscription = supabase
+            .channel('dashboard_suppliers')
+            .on('postgres_changes', {
+                event: '*',
+                schema: 'public',
+                table: 'suppliers'
+            }, (payload) => {
+                console.log('🔄 Dashboard: suppliers update:', payload);
+                refetchDashboardData();
+            })
+            .subscribe();
+
+        return () => {
+            console.log('🔄 Dashboard: Removendo subscriptions realtime...');
+            dailyPricesSubscription.unsubscribe();
+            groupsSubscription.unsubscribe();
+            postosSubscription.unsubscribe();
+            suppliersSubscription.unsubscribe();
+        };
+    }, [userId, refetchDashboardData]);
     
+    // CORRIGIDO: available_products são combustíveis, não bases
+    // Para bases, usar city_ids dos suppliers
     const allUniqueSupplierBases = useMemo(() => {
       const bases = new Set();
       suppliers.forEach(s => {
-        (s.available_products || []).forEach(p => bases.add(p));
+        (s.city_ids || []).forEach(cityId => {
+          const baseCity = baseCities.find(b => b.id === cityId);
+          if (baseCity) bases.add(baseCity.name);
+        });
       });
       return Array.from(bases);
-    }, [suppliers]);
+    }, [suppliers, baseCities]);
 
 
     const updateOilPricesInBackground = useCallback(async () => {
@@ -369,9 +441,12 @@ const Dashboard = () => {
             return { cost: chosenEntry[1], vehicleKey: chosenEntry[0] };
         };
 
-        // Pegar bases do grupo selecionado
+        // CORRIGIDO: Usar base_city_id (singular) como no banco, não base_city_ids (plural)
         const groupBaseCityIds = selectedGroup && selectedGroup !== 'Todos'
-            ? (groups.find(g => g.id === selectedGroup)?.base_city_ids || [])
+            ? (() => {
+                const group = groups.find(g => g.id === selectedGroup);
+                return group?.base_city_id ? [group.base_city_id] : [];
+            })()
             : null;
 
         const results = suppliers
@@ -498,10 +573,25 @@ const Dashboard = () => {
         if (!selectedBase?.id) return groups;
         
         return groups.filter(g => {
-            // Verificar se o grupo carrega na base selecionada
-            return g.base_city_ids?.includes(selectedBase.id);
+            // CORRIGIDO: Usar mesma lógica do PriceEntry.jsx - grupos aparecem se podem carregar da base selecionada
+            // Primeiro: verificar se o próprio grupo pode carregar da base selecionada
+            if (g.base_city_id === selectedBase.id) {
+                return true;
+            }
+            
+            // Segundo: verificar se algum posto do grupo permite suprimento da base selecionada
+            const groupPostos = postos.filter(p => (p.group_ids || []).includes(g.id));
+            if (groupPostos.length > 0) {
+                // Verificar se algum posto permite suprimento da base selecionada
+                return groupPostos.some(posto => 
+                    (posto.allowed_supply_cities || []).includes(selectedBase.id)
+                );
+            }
+            
+            // Se grupo não tem base definida, permitir (compatível com qualquer base)
+            return !g.base_city_id;
         });
-    }, [groups, selectedBase]);
+    }, [groups, selectedBase, postos]);
 
     // Filtrar postos pelo grupo selecionado
     const filteredPostos = useMemo(() => {

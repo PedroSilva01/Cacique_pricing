@@ -16,6 +16,7 @@ export const defaultSettings = {
     gasolina_aditivada: { name: "Gasolina Aditivada" },
     etanol: { name: "Etanol" },
     etanol_aditivado: { name: "Etanol Aditivado" },
+    diesel_s10: { name: "Diesel S10"},
     diesel_s10_aditivado: { name: "Diesel S10 Aditivado" },
     diesel_s500: { name: "Diesel S500" },
   },

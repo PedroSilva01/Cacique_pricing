@@ -555,7 +555,6 @@ const VolumeAnalytics = () => {
                   />
                   <Legend />
                   <Bar dataKey="volume" fill="#0088FE" name="Volume" />
-                  <Line type="monotone" dataKey="avgPrice" stroke="#00C49F" name="Preço Médio" />
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>

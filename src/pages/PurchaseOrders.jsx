@@ -339,34 +339,47 @@ const PurchaseOrders = () => {
       }
     }
 
-    const groupId = posto.group_ids?.[0];
-    if (!groupId) {
+    // CORRIGIDO: Posto pode pertencer a múltiplos grupos - buscar em todos
+    const postoGroupIds = posto.group_ids || [];
+    if (!postoGroupIds.length) {
       console.log('⚠️ Posto sem grupo:', { stationId, posto: posto.name });
       return null;
     }
 
-    const group = groups.find(g => g.id === groupId);
-    if (!group) {
-      console.log('⚠️ Grupo não encontrado:', { groupId });
-      return null;
-    }
+    // Buscar target_price em qualquer grupo do posto
+    let targetPrice = null;
+    let foundGroup = null;
     
-    if (!group.target_prices) {
-      console.log('⚠️ Grupo sem target_prices:', { groupId, groupName: group.name });
-      return null;
+    for (const groupId of postoGroupIds) {
+      const group = groups.find(g => g.id === groupId);
+      if (!group?.target_prices) continue;
+      
+      const key = baseId && baseId !== 'all' ? `${fuelType}_${baseId}` : fuelType;
+      const price = group.target_prices[key] || group.target_prices[fuelType];
+      
+      if (price) {
+        targetPrice = price;
+        foundGroup = group;
+        break; // Usar primeiro grupo que tem preço target
+      }
     }
 
-    const key = baseId && baseId !== 'all' ? `${fuelType}_${baseId}` : fuelType;
-    const targetPrice = group.target_prices[key] || group.target_prices[fuelType];
+    if (!foundGroup) {
+      console.log('⚠️ Nenhum grupo com target_prices:', { 
+        stationId, 
+        posto: posto.name, 
+        groupIds: postoGroupIds 
+      });
+      return null;
+    }
     
     console.log('🎯 Buscando target_price:', {
       stationId,
       fuelType,
       baseId,
       supplierId,
-      groupId,
-      groupName: group.name,
-      key,
+      groupId: foundGroup.id,
+      groupName: foundGroup.name,
       targetPrice
     });
     
@@ -434,7 +447,7 @@ const PurchaseOrders = () => {
     const rate = stationId ? getFinancialRate(stationId, supplierId, days) : financialCostRate;
     
     const volumeLiters = vol * 1000;
-    const pricePerLiter = total / volumeLiters;
+    const pricePerLiter = volumeLiters > 0 ? total / volumeLiters : 0;
     const financialCostPerLiter = rate * days;
     const effectivePrice = pricePerLiter - financialCostPerLiter;
     const totalFinancialCost = financialCostPerLiter * volumeLiters;
@@ -517,11 +530,48 @@ const PurchaseOrders = () => {
         });
         return;
       }
+
+      // CRÍTICO: Validar compatibilidade de fornecedor com grupo/posto
+      const supplierId = entry.specificSupplier || selectedSupplier;
+      const postoGroupIds = posto?.group_ids || [];
+      
+      if (postoGroupIds.length && supplierId) {
+        // Verificar restrições em todos os grupos do posto
+        for (const groupId of postoGroupIds) {
+          const group = groups.find(g => g.id === groupId);
+          
+          // Se o grupo tem restrição de fornecedores
+          if (group?.allowed_suppliers && group.allowed_suppliers.length > 0) {
+            if (!group.allowed_suppliers.includes(supplierId)) {
+              toast({
+                title: 'Fornecedor não autorizado',
+                description: `Grupo "${group.name}" não permite compras do fornecedor selecionado`,
+                variant: 'destructive'
+              });
+              return;
+            }
+          }
+        }
+        
+        // Verificar restrição do posto
+        if (posto?.allowed_suppliers && posto.allowed_suppliers.length > 0) {
+          if (!posto.allowed_suppliers.includes(supplierId)) {
+            toast({
+              title: 'Fornecedor não autorizado',
+              description: `Posto "${posto.name}" não permite compras do fornecedor selecionado`,
+              variant: 'destructive'
+            });
+            return;
+          }
+        }
+      }
     }
 
     setSaving(true);
     try {
-      const groupId = posto?.group_ids?.[0];
+      // CORRIGIDO: Para múltiplos grupos, usar o primeiro que tem target_prices
+      const postoGroupIds = posto?.group_ids || [];
+      const primaryGroupId = postoGroupIds.length > 0 ? postoGroupIds[0] : null;
       
       const ordersToSave = productEntries.map(entry => {
         const calc = calculatePrice(entry.totalValue, entry.volume, entry.paymentDays, selectedStation, entry.specificSupplier);
@@ -559,7 +609,7 @@ const PurchaseOrders = () => {
         const { error } = await supabase
           .from('purchase_orders')
           .upsert(order, {
-            onConflict: 'user_id, station_id, order_date, fuel_type'
+            onConflict: 'user_id, station_id, order_date, fuel_type, supplier_id'
           });
 
         if (error) throw error;
@@ -638,7 +688,7 @@ const PurchaseOrders = () => {
       }
       
       // Usar preço efetivo = unit_price - (daily_financial_cost / volume / 1000)
-      const effectivePrice = o.unit_price - (o.daily_financial_cost / (o.volume * 1000));
+      const effectivePrice = o.unit_price - (o.volume > 0 ? (o.daily_financial_cost / (o.volume * 1000)) : 0);
       const isIncorrect = Math.abs(effectivePrice - targetPrice) > 0.01;
       
       if (isIncorrect) {
@@ -1291,16 +1341,16 @@ const PurchaseOrders = () => {
                         <TableCell className="px-2 text-right whitespace-nowrap">
                           {deleteConfirmId === order.id ? (
                             <div className="flex gap-1">
-                              <Button size="sm" variant="destructive" onClick={() => handleDelete(order.id)} className="h-8 px-2">
+                              <Button size="sm" variant="destructive" onClick={() => handleDelete(order.id)} className="h-10 px-4 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 rounded-xl font-semibold">
                                 <Check className="w-4 h-4 mr-1" />
-                                Confirmar
+                                ✅ Confirmar
                               </Button>
-                              <Button size="sm" variant="ghost" onClick={() => setDeleteConfirmId(null)} className="h-8 px-2">
+                              <Button size="sm" variant="ghost" onClick={() => setDeleteConfirmId(null)} className="h-10 px-4 rounded-xl border-2 border-slate-300 hover:bg-slate-100 font-semibold">
                                 <X className="w-4 h-4" />
                               </Button>
                             </div>
                           ) : (
-                            <Button size="sm" variant="ghost" onClick={() => handleDelete(order.id)} className="h-8 w-8 p-0">
+                            <Button size="sm" variant="ghost" onClick={() => handleDelete(order.id)} className="h-10 w-10 p-0 rounded-xl hover:bg-red-50 dark:hover:bg-red-950/20 transition-all">
                               <Trash2 className="w-4 h-4 text-red-600" />
                             </Button>
                           )}

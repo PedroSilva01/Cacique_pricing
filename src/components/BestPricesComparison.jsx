@@ -104,7 +104,7 @@ const BestPricesComparison = ({ settings, cities, suppliers, postos, groups, fre
             supplier: supplier.name,
             baseCity: baseCity.name,
             baseCityId: baseCityId,
-            fuel: fuelTypes[fuelKey]?.name || fuelKey,
+            fuel: settings?.fuelTypes?.[fuelKey]?.name || fuelKey,
             fuelKey,
             fuelPrice,
             freightCost,

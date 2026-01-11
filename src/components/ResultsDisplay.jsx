@@ -2,10 +2,11 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { TrendingDown, TrendingUp, Award, Truck } from 'lucide-react';
 
-const ResultsDisplay = ({ results, selectedFuel }) => {
+const ResultsDisplay = ({ results, selectedFuel, fuelTypes = {} }) => {
   if (!results || results.length === 0) return null;
 
   const bestDeal = results[0];
+  const fuelName = fuelTypes[selectedFuel]?.name || selectedFuel;
   const worstDeal = results[results.length - 1];
   const savings = worstDeal.totalCost - bestDeal.totalCost;
 
@@ -75,7 +76,7 @@ const ResultsDisplay = ({ results, selectedFuel }) => {
         className="glass-effect rounded-xl overflow-hidden shadow-sm"
       >
         <div className="p-6 border-b border-gray-200">
-          <h3 className="text-xl font-bold text-gray-800">Comparativo Detalhado - {selectedFuel}</h3>
+          <h3 className="text-xl font-bold text-gray-800">Comparativo Detalhado - {fuelName}</h3>
           <p className="text-sm text-gray-500">Custo Total = (Preço Base + Frete) x Volume</p>
         </div>
         

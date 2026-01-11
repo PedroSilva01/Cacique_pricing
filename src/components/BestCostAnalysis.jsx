@@ -137,8 +137,8 @@ const BestCostAnalysis = ({
 
       // Calcular estatísticas da base
       const allCosts = costsPerPosto.flatMap(p => p.costs);
-      const bestCost = Math.min(...allCosts.map(c => c.finalCost));
-      const avgCost = allCosts.reduce((sum, c) => sum + c.finalCost, 0) / allCosts.length;
+      const bestCost = allCosts.length > 0 ? Math.min(...allCosts.map(c => c.finalCost)) : 0;
+      const avgCost = allCosts.length > 0 ? allCosts.reduce((sum, c) => sum + c.finalCost, 0) / allCosts.length : 0;
       const bestSupplier = allCosts.find(c => c.finalCost === bestCost);
       
       // Agrupar por fornecedor e pegar o melhor custo de cada

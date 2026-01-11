@@ -112,9 +112,15 @@ export default function FinancialDashboard() {
           for (const order of ordersData) {
             if (!order.postos?.group_ids || order.postos.group_ids.length === 0) continue;
             
-            // Encontrar o grupo do posto
-            const groupId = order.postos.group_ids[0];
-            const group = groups.find(g => g.id === groupId);
+            // CORRIGIDO: Posto pode ter múltiplos grupos - buscar o primeiro com reference_posto_id
+            let group = null;
+            for (const groupId of order.postos.group_ids) {
+              const foundGroup = groups.find(g => g.id === groupId);
+              if (foundGroup?.reference_posto_id) {
+                group = foundGroup;
+                break;
+              }
+            }
             
             if (!group || !group.reference_posto_id) continue;
             
@@ -135,8 +141,8 @@ export default function FinancialDashboard() {
             const priceDifference = order.unit_price - referencePrice;
             const deviationPercentage = (priceDifference / referencePrice) * 100;
             
-            // Considerar alerta se desvio > R$ 0,02 por litro
-            if (priceDifference > 0.02) {
+            // CORRIGIDO: Considerar alerta se desvio absoluto > R$ 0,02 por litro (positivo OU negativo)
+            if (Math.abs(priceDifference) > 0.02) {
               alerts.push({
                 id: order.id,
                 postoName: order.postos.name,
@@ -719,7 +725,7 @@ export default function FinancialDashboard() {
           </CardDescription>
         </CardHeader>
         <CardContent className="pt-6">
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
             {weekDays.map(day => {
               const limit = weeklyLimits[day.key] || 0;
               const payment = dailyPayments[day.key] || 0;
@@ -727,7 +733,7 @@ export default function FinancialDashboard() {
               const isOverLimit = payment > limit;
               
               return (
-                <div key={day.key} className={`p-4 rounded-xl border-2 transition-all ${
+                <div key={day.key} className={`p-3 rounded-xl border-2 transition-all min-w-0 ${
                   !day.hasLimit
                     ? 'bg-gray-100 border-gray-300 dark:bg-gray-800 dark:border-gray-600 opacity-60'
                     : isOverLimit 
@@ -736,27 +742,29 @@ export default function FinancialDashboard() {
                         ? 'bg-yellow-50 border-yellow-300 dark:bg-yellow-900/20 dark:border-yellow-700'
                         : 'bg-gray-50 border-gray-300 dark:bg-gray-900/20 dark:border-gray-700'
                 }`}>
-                  <div className="text-center mb-2">
-                    <div className="font-bold text-lg mb-1">{day.short}</div>
+                  <div className="text-center mb-3">
+                    <div className="font-bold text-base mb-1">{day.short}</div>
                     <div className="text-xs text-muted-foreground">
                       {day.name}
-                      {!day.hasLimit && <span className="block text-orange-600 font-semibold">(Sem limite)</span>}
+                      {!day.hasLimit && <span className="block text-orange-600 font-semibold text-xs">(Sem limite)</span>}
                     </div>
                   </div>
                   
-                  <div className="space-y-2">
+                  <div className="space-y-2 min-w-0">
                     {day.hasLimit && (
                       <>
-                        <div className="flex justify-between items-center">
-                          <span className="text-xs text-muted-foreground">Limite:</span>
-                          <span className="font-mono text-sm font-bold">R$ {formatCurrency(limit)}</span>
+                        <div className="space-y-1">
+                          <span className="text-xs text-muted-foreground block">Limite:</span>
+                          <span className="font-mono text-xs font-bold block truncate" title={`R$ ${formatCurrency(limit)}`}>
+                            R$ {formatCurrency(limit)}
+                          </span>
                         </div>
                         
-                        <div className="flex justify-between items-center">
-                          <span className="text-xs text-muted-foreground">Pagamentos:</span>
-                          <span className={`font-mono text-sm font-bold ${
+                        <div className="space-y-1">
+                          <span className="text-xs text-muted-foreground block">Pagamentos:</span>
+                          <span className={`font-mono text-xs font-bold block truncate ${
                             isOverLimit ? 'text-red-600' : payment > 0 ? 'text-yellow-600' : 'text-gray-600'
-                          }`}>
+                          }`} title={`R$ ${formatCurrency(payment)}`}>
                             R$ {formatCurrency(payment)}
                           </span>
                         </div>

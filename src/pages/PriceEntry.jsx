@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { DollarSign, Save, RefreshCw, Trash2, MapPin, Building, Copy, AlertTriangle, X } from 'lucide-react';
+import { DollarSign, Save, RefreshCw, Trash2, MapPin, Building, Copy, AlertTriangle, CheckCircle, ChevronDown, ChevronRight, X } from 'lucide-react';
 import { supabase } from '@/lib/customSupabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { useToast } from '@/components/ui/use-toast';
@@ -77,12 +77,45 @@ const PriceEntry = () => {
   const [totalPricesPages, setTotalPricesPages] = useState(1);
   const [loadingRecentPrices, setLoadingRecentPrices] = useState(true);
   const [recentPricesFilterDate, setRecentPricesFilterDate] = useState(getLocalDateString()); // Filtro de data independente para últimos preços
+  const [recentPricesFilterPosto, setRecentPricesFilterPosto] = useState(''); // Filtro por posto
   const [maintainedPrices, setMaintainedPrices] = useState({}); // { fuel_key: { price: X, date: 'YYYY-MM-DD' } }
+  const [groupsWithoutUpdates, setGroupsWithoutUpdates] = useState([]);
+  const [loadingGroupsStatus, setLoadingGroupsStatus] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState(new Set()); // Controla quais grupos estão expandidos
   const [loadingLastPrice, setLoadingLastPrice] = useState({});
 
   // Dados computados
   const currentSupplier = suppliers.find(s => s.id === selectedSupplier);
-  const availableProducts = currentSupplier?.available_products || [];
+  
+  // MELHORADO: Mostrar TODOS os combustíveis dos postos do grupo, independente do fornecedor
+  const availableProducts = useMemo(() => {
+    if (selectedGroups.length === 0) return [];
+    
+    // Buscar postos dos grupos selecionados
+    const groupPostos = postos.filter(posto => 
+      posto.group_ids && posto.group_ids.some(gId => selectedGroups.includes(gId))
+    );
+    
+    // Coletar todos os fuel_types únicos dos postos
+    const allFuelTypes = new Set();
+    groupPostos.forEach(posto => {
+      if (Array.isArray(posto.fuel_types)) {
+        posto.fuel_types.forEach(fuel => {
+          if (fuel && typeof fuel === 'string' && settings.fuelTypes?.[fuel]) {
+            allFuelTypes.add(fuel);
+          }
+        });
+      }
+    });
+    
+    return Array.from(allFuelTypes);
+  }, [selectedGroups, postos, settings.fuelTypes]);
+
+  // Função para verificar se fornecedor vende determinado combustível
+  const supplierSellsFuel = useCallback((fuelKey) => {
+    if (!currentSupplier?.available_products) return false;
+    return currentSupplier.available_products.includes(fuelKey);
+  }, [currentSupplier]);
 
   // Fetch últimos preços adicionados - apenas da data filtrada
   const fetchRecentPrices = useCallback(async (page = 1) => {
@@ -91,6 +124,11 @@ const PriceEntry = () => {
       setRecentPrices([]);
       setTotalPricesPages(0);
       setLoadingRecentPrices(false);
+      return;
+    }
+
+    // Aguardar postos carregarem antes de processar histórico
+    if (!postos || postos.length === 0) {
       return;
     }
 
@@ -124,29 +162,42 @@ const PriceEntry = () => {
           (record.group_ids || []).some(gid => (p.group_ids || []).includes(gid))
         );
 
-        // Criar uma entrada para cada combinação posto + produto
+
+        // Criar uma entrada para cada combinação posto + produto + FORNECEDOR
+        // CORRIGIDO: Usar record.id (único por fornecedor) no ID para evitar sobreposição
         affectedPostosForRecord.forEach(posto => {
           Object.entries(record.prices || {}).forEach(([fuelType, price]) => {
             allProcessedPrices.push({
-              id: `${record.id}-${posto.id}-${fuelType}`,
+              id: `${record.id}-${posto.id}-${fuelType}`, // Mantém record.id para unicidade por fornecedor
               date: record.date,
               fuelType,
               price,
               supplier: record.suppliers?.name || 'N/A',
               baseCity: record.base_cities?.name || 'N/A',
               posto: posto.name,
-              createdAt: record.created_at
+              postoBandeira: posto.bandeira || 'N/A',
+              createdAt: record.created_at,
             });
           });
         });
       });
 
-      // Agora paginar os itens processados
-      const totalItems = allProcessedPrices.length;
+      // CORRIGIDO: Ordenar por data de criação (mais recente primeiro) antes de paginar
+      allProcessedPrices.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+
+      // FILTRAR por posto se selecionado
+      let filteredPrices = allProcessedPrices;
+      if (recentPricesFilterPosto && recentPricesFilterPosto !== 'all') {
+        filteredPrices = allProcessedPrices.filter(p => p.posto === recentPricesFilterPosto);
+      }
+
+      // Agora paginar os itens processados e filtrados
+      const totalItems = filteredPrices.length;
       const totalPages = Math.ceil(totalItems / itemsPerPage);
       const startIndex = (page - 1) * itemsPerPage;
       const endIndex = startIndex + itemsPerPage;
-      const paginatedPrices = allProcessedPrices.slice(startIndex, endIndex);
+      const paginatedPrices = filteredPrices.slice(startIndex, endIndex);
 
       setRecentPrices(paginatedPrices);
       setTotalPricesPages(totalPages);
@@ -157,14 +208,247 @@ const PriceEntry = () => {
     } finally {
       setLoadingRecentPrices(false);
     }
-  }, [recentPricesFilterDate, postos, toast]);
+  }, [recentPricesFilterDate, recentPricesFilterPosto, postos, toast]);
 
-  // Carregar preços recentes ao montar o componente e quando mudar a data de filtro
+  // Buscar status completo de preços por grupo e base
+  const fetchGroupsWithoutUpdates = useCallback(async () => {
+    if (!groups.length) {
+      setGroupsWithoutUpdates([]);
+      return;
+    }
+
+    setLoadingGroupsStatus(true);
+    try {
+      const today = getLocalDateString();
+      console.log('🔍 DEBUG - Buscando status completo dos grupos para:', { today, totalGroups: groups.length });
+
+      // NOVO DEBUG: Primeiro, vamos ver TODOS os registros que foram salvos hoje
+      const { data: allTodayData } = await supabase
+        .from('daily_prices')
+        .select('*')
+        .eq('date', today)
+        .eq('user_id', userId);
+
+      console.log('🔍 DEBUG - TODOS os registros salvos hoje:', allTodayData);
+
+      // Buscar todos os registros de preços de hoje para todos os grupos
+      const { data: todayPrices, error } = await supabase
+        .from('daily_prices')
+        .select('group_ids, base_cities(id, name), suppliers(name), created_at')
+        .eq('date', today)
+        .eq('user_id', userId);
+
+      if (error) throw error;
+
+      // Para cada grupo, verificar status em cada base que ele pode carregar
+      const groupsStatus = await Promise.all(
+        groups.map(async (group) => {
+          // Determinar bases permitidas para este grupo
+          const allowedBases = new Set();
+
+          // Base do grupo (se especificada)
+          if (group.base_city_id) {
+            const baseCity = baseCities.find(b => b.id === group.base_city_id);
+            if (baseCity) allowedBases.add(baseCity);
+          }
+          
+          // Bases dos postos do grupo
+          const groupPostos = postos.filter(p => (p.group_ids || []).includes(group.id));
+          groupPostos.forEach(posto => {
+            (posto.allowed_supply_cities || []).forEach(baseCityId => {
+              const baseCity = baseCities.find(b => b.id === baseCityId);
+              if (baseCity) allowedBases.add(baseCity);
+            });
+          });
+
+          // Se não tem base definida, pode carregar de qualquer base
+          if (allowedBases.size === 0) {
+            baseCities.forEach(base => allowedBases.add(base));
+          }
+
+          // Para cada base, verificar se tem preços hoje e última atualização
+          const baseStatuses = await Promise.all(
+            Array.from(allowedBases).map(async (base) => {
+              // Verificar se tem preços hoje para esta base
+              const todayRecords = todayPrices.filter(record => 
+                (record.group_ids || []).includes(group.id) && 
+                record.base_cities?.id === base.id
+              );
+              
+              const hasTodayPrice = todayRecords.length > 0;
+              const todayRecord = todayRecords[0]; // Para compatibilidade
+
+              // NOVO: Contar fornecedores para grupos Bandeira Branca
+              const supplierProgress = (() => {
+                if (group.bandeira !== 'bandeira_branca') return null;
+                
+                // Contar fornecedores únicos que inseriram preços hoje para esta base
+                const uniqueSuppliers = new Set(
+                  todayRecords
+                    .filter(record => record.suppliers?.name)
+                    .map(record => record.suppliers.name)
+                );
+                
+                // Contar total de fornecedores que atendem esta base
+                const baseSuppliersCount = suppliers.filter(supplier => 
+                  !supplier.city_ids || supplier.city_ids.includes(base.id)
+                ).length;
+                
+                return {
+                  inserted: uniqueSuppliers.size,
+                  total: baseSuppliersCount,
+                  supplierNames: Array.from(uniqueSuppliers)
+                };
+              })();
+
+              // Buscar última atualização para esta base - CORRIGIDO: Remover .single() para evitar erro 406
+              const { data: lastUpdates, error: lastUpdateError } = await supabase
+                .from('daily_prices')
+                .select('date, created_at, maintained_prices, suppliers(name)')
+                .contains('group_ids', [group.id])
+                .eq('base_city_id', base.id)
+                .eq('user_id', userId)
+                .order('created_at', { ascending: false })
+                .limit(1);
+
+              // Pegar o primeiro registro se houver
+              const lastUpdate = lastUpdates && lastUpdates.length > 0 ? lastUpdates[0] : null;
+
+              if (lastUpdateError) {
+                console.error(`Erro ao buscar última atualização para ${group.name}/${base.name}:`, lastUpdateError);
+              }
+
+              return {
+                base: base,
+                hasToday: hasTodayPrice,
+                todayTimestamp: todayRecord ? todayRecord.created_at : null,
+                todaySupplier: todayRecord ? todayRecord.suppliers?.name : null,
+                supplierProgress: supplierProgress, // NOVO: Progresso de fornecedores para Bandeira Branca
+                lastUpdate: lastUpdate ? {
+                  date: lastUpdate.date,
+                  createdAt: lastUpdate.created_at,
+                  supplier: lastUpdate.suppliers?.name,
+                  // CORRIGIDO: Usar a data mais recente dos preços mantidos
+                  displayDate: (() => {
+                    if (!lastUpdate.maintained_prices || typeof lastUpdate.maintained_prices !== 'object') {
+                      return lastUpdate.date; // Fallback para date se não há maintained_prices
+                    }
+                    
+                    // Extrair todas as datas do maintained_prices e encontrar a mais recente
+                    const maintainedDates = Object.values(lastUpdate.maintained_prices).filter(date => date);
+                    if (maintainedDates.length === 0) {
+                      return lastUpdate.date; // Fallback se não há datas maintained
+                    }
+                    
+                    // Retornar a data mais recente
+                    return maintainedDates.sort().reverse()[0]; // Descending sort, pegar primeira (mais recente)
+                  })()
+                } : null
+              };
+            })
+          );
+
+          const hasMissingBases = baseStatuses.some(bs => !bs.hasToday);
+
+          return {
+            ...group,
+            baseStatuses,
+            hasMissingBases,
+            postos: groupPostos.length
+          };
+        })
+      );
+
+      // Mostrar todos os grupos independente do status (para controle)
+
+      setGroupsWithoutUpdates(groupsStatus); // Todos os grupos, não apenas os com bases faltantes
+    } catch (err) {
+      console.error('Erro ao buscar status dos grupos:', err);
+      setGroupsWithoutUpdates([]);
+    } finally {
+      setLoadingGroupsStatus(false);
+    }
+  }, [groups, baseCities, postos, userId]);
+
+  // Função para alternar expansão de grupo
+  const toggleGroupExpansion = (groupId) => {
+    setExpandedGroups(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(groupId)) {
+        newSet.delete(groupId);
+      } else {
+        newSet.add(groupId);
+      }
+      return newSet;
+    });
+  };
+
+  // Carregar preços recentes ao montar o componente e quando mudar a data de filtro OU posto
   useEffect(() => {
-    if (groups.length > 0 && recentPricesFilterDate) {
+    // CORRIGIDO: Aguardar TODOS os dados carregarem antes de buscar histórico
+    if (groups.length > 0 && postos.length > 0 && recentPricesFilterDate) {
       fetchRecentPrices(1);
     }
-  }, [groups.length, recentPricesFilterDate, fetchRecentPrices]);
+  }, [groups.length, postos.length, recentPricesFilterDate, recentPricesFilterPosto, fetchRecentPrices]);
+
+  // Carregar status dos grupos quando dados estiverem prontos
+  useEffect(() => {
+    console.log('🔍 DEBUG - UseEffect groupsStatus:', {
+      groupsLength: groups.length,
+      postosLength: postos.length,
+      baseCitiesLength: baseCities.length
+    });
+    
+    if (groups.length > 0 && postos.length > 0 && baseCities.length > 0) {
+      console.log('🔍 DEBUG - Chamando fetchGroupsWithoutUpdates...');
+      fetchGroupsWithoutUpdates();
+    }
+  }, [groups.length, postos.length, baseCities.length, fetchGroupsWithoutUpdates]);
+
+  // Subscription para updates automáticos via Supabase Realtime
+  useEffect(() => {
+    if (!userId) return;
+
+    console.log('🔄 Configurando subscription realtime para daily_prices...');
+    
+    // Criar subscription para mudanças na tabela daily_prices
+    const subscription = supabase
+      .channel('daily_prices_changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*', // INSERT, UPDATE, DELETE
+          schema: 'public',
+          table: 'daily_prices',
+          filter: `user_id=eq.${userId}` // Apenas mudanças do usuário atual
+        },
+        (payload) => {
+          console.log('🔄 Realtime update recebido:', payload);
+          
+          // Atualizar status dos grupos automaticamente
+          if (groups.length > 0 && postos.length > 0 && baseCities.length > 0) {
+            console.log('🔄 Auto-atualizando status dos grupos via realtime...');
+            fetchGroupsWithoutUpdates();
+          }
+          
+          // Também atualizar histórico se estiver na data atual
+          const today = getLocalDateString();
+          if (recentPricesFilterDate === today) {
+            console.log('🔄 Auto-atualizando histórico de preços via realtime...');
+            fetchRecentPrices(pricesPage);
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log('🔄 Status da subscription realtime:', status);
+      });
+
+    // Cleanup da subscription
+    return () => {
+      console.log('🔄 Removendo subscription realtime...');
+      subscription.unsubscribe();
+    };
+  }, [userId, groups.length, postos.length, baseCities.length, recentPricesFilterDate, pricesPage, fetchGroupsWithoutUpdates, fetchRecentPrices]);
 
   // Calcular postos afetados com memoização
   const affectedPostos = useMemo(() => 
@@ -174,18 +458,43 @@ const PriceEntry = () => {
 
   const filteredGroups = useMemo(() => 
     groups.filter(group => {
-      // Filtro por base
-      const baseMatch = !selectedBase || !group.base_city_ids || group.base_city_ids.includes(selectedBase);
+      // Filtro por nome do grupo se houver busca
+      const nameMatch = !groupSearch || 
+        group.name.toLowerCase().includes(groupSearch.toLowerCase());
+      
+      // CORRIGIDO: Filtro por base - grupos aparecem se podem carregar da base selecionada
+      const baseMatch = !selectedBase || (() => {
+        // Primeiro: verificar se o próprio grupo pode carregar da base selecionada
+        if (group.base_city_id === selectedBase) {
+          return true;
+        }
+        
+        // Segundo: verificar se algum posto do grupo permite suprimento da base selecionada
+        const groupPostos = postos.filter(p => (p.group_ids || []).includes(group.id));
+        if (groupPostos.length > 0) {
+          // Verificar se algum posto permite suprimento da base selecionada
+          return groupPostos.some(posto => 
+            (posto.allowed_supply_cities || []).includes(selectedBase)
+          );
+        }
+        
+        // Se grupo não tem base definida, permitir (compatível com qualquer base)
+        return !group.base_city_id;
+      })();
 
-      // Filtro por fornecedor: apenas grupos que permitem o fornecedor selecionado
+      // Filtro por fornecedor - verificar se fornecedor está permitido para o grupo
       const supplierMatch = !selectedSupplier || 
         !group.allowed_supplier_ids || 
         group.allowed_supplier_ids.length === 0 || 
-        group.allowed_supplier_ids.includes(selectedSupplier);
+        (group.allowed_supplier_ids.includes(selectedSupplier) && (() => {
+          const supplier = suppliers.find(s => s.id === selectedSupplier);
+          // Fornecedor deve atender a base selecionada
+          return !supplier?.city_ids || supplier.city_ids.includes(selectedBase);
+        })());
       
-      return supplierMatch && baseMatch;
+      return nameMatch && baseMatch && supplierMatch;
     }),
-    [groups, selectedBase, selectedSupplier]
+    [groups, groupSearch, selectedBase, selectedSupplier, suppliers, postos]
   );
   
   // Salvar estado no context quando mudar
@@ -465,16 +774,34 @@ const PriceEntry = () => {
       return;
     }
 
+    if (!selectedGroups || selectedGroups.length === 0) {
+      toast({ title: 'Selecione pelo menos um grupo', variant: 'destructive' });
+      return;
+    }
+
     setLoadingLastPrices(true);
     try {
-      const { data, error } = await supabase
+      // CORRIGIDO: Buscar preços que contenham pelo menos um dos grupos selecionados
+      let query = supabase
         .from('daily_prices')
-        .select('prices, date')
+        .select('prices, date, group_ids')
         .eq('user_id', user.id)
         .eq('supplier_id', selectedSupplier)
         .eq('base_city_id', selectedBase)
         .lte('date', date)
-        .order('date', { ascending: false })
+        .order('date', { ascending: false });
+
+      // Filtrar por grupos selecionados - buscar registros que contenham pelo menos um dos grupos
+      if (selectedGroups.length === 1) {
+        query = query.contains('group_ids', [selectedGroups[0]]);
+      } else {
+        // Para múltiplos grupos, buscar registros que tenham intersecção
+        query = query.or(
+          selectedGroups.map(groupId => `group_ids.cs.{${groupId}}`).join(',')
+        );
+      }
+
+      const { data, error } = await query
         .limit(1)
         .maybeSingle();
 
@@ -482,12 +809,19 @@ const PriceEntry = () => {
 
       if (data?.prices) {
         setPrices(data.prices || {});
+        
+        // Encontrar quais grupos estavam no registro carregado
+        const loadedGroupNames = groups
+          .filter(g => (data.group_ids || []).includes(g.id))
+          .map(g => g.name)
+          .join(', ');
+        
         toast({
-          title: 'Últimos preços carregados',
-          description: `Baseados no lançamento de ${(() => {
+          title: 'Últimos preços carregados ✅',
+          description: `Data: ${(() => {
                             const [year, month, day] = data.date.split('-');
                             return `${day.padStart(2, '0')}/${month.padStart(2, '0')}/${year}`;
-                          })()}`,
+                          })()} | Grupos: ${loadedGroupNames}`,
         });
       } else {
         toast({
@@ -602,14 +936,57 @@ const PriceEntry = () => {
         }
       });
 
+      // CORRIGIDO: Verificar se já existe registro para fazer merge dos group_ids - SEM .single() para evitar erro
+      const { data: existingRecords, error: existingError } = await supabase
+        .from('daily_prices')
+        .select('group_ids, prices, maintained_prices')
+        .eq('user_id', user.id)
+        .eq('supplier_id', selectedSupplier)
+        .eq('base_city_id', selectedBase)
+        .eq('date', date);
+
+      const existingRecord = existingRecords && existingRecords.length > 0 ? existingRecords[0] : null;
+
+      // DEBUG: Log para verificar merge de grupos
+      if (existingRecord) {
+        console.log('📦 MERGE - Registro existente encontrado:', {
+          existing_groups: existingRecord.group_ids,
+          new_groups: selectedGroups,
+          supplier: selectedSupplier,
+          base: selectedBase,
+          date
+        });
+      }
+
+      // Fazer merge dos group_ids se já existir registro
+      const finalGroupIds = existingRecord 
+        ? [...new Set([...(existingRecord.group_ids || []), ...selectedGroups])]
+        : selectedGroups;
+
+      console.log('📦 MERGE - Grupos finais:', {
+        finalGroupIds,
+        wasExisting: !!existingRecord
+      });
+
+      // Fazer merge dos preços mantendo os existentes e adicionando/atualizando os novos
+      const finalPrices = existingRecord
+        ? { ...existingRecord.prices, ...prices }
+        : prices;
+
+      // Fazer merge dos maintained_prices
+      const existingMaintained = existingRecord?.maintained_prices || {};
+      const finalMaintained = { ...existingMaintained, ...maintained };
+
       const dataToSave = {
         user_id: user.id,
         supplier_id: selectedSupplier,
         base_city_id: selectedBase,
         date,
-        prices,
-        group_ids: selectedGroups,
-        maintained_prices: Object.keys(maintained).length > 0 ? maintained : {},
+        prices: finalPrices,
+        group_ids: finalGroupIds,
+        maintained_prices: Object.keys(finalMaintained).length > 0 ? finalMaintained : {},
+        // CORRIGIDO: Forçar atualização do created_at quando há merge para mostrar horário correto
+        ...(existingRecord ? { created_at: new Date().toISOString() } : {})
       };
 
       const { error } = await supabase
@@ -630,6 +1007,8 @@ const PriceEntry = () => {
       setSelectedGroups([]);
       // Recarregar histórico de preços
       fetchRecentPrices(pricesPage);
+      // Recarregar status dos grupos para atualização em tempo real
+      fetchGroupsWithoutUpdates();
     } catch (err) {
       console.error('Erro ao salvar preços:', err);
       showErrorToast(toast, { title: 'Erro ao salvar preços', error: err });
@@ -825,12 +1204,23 @@ const PriceEntry = () => {
                     if (!fuelInfo) return null;
 
                     const isMaintained = maintainedPrices[fuelKey];
+                    const supplierHasFuel = supplierSellsFuel(fuelKey);
 
                     return (
                       <div key={fuelKey} className="group">
-                        <Label htmlFor={`price-${fuelKey}`} className="font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-2 mb-3">
-                          <span className="text-green-600 dark:text-green-400">💰</span>
+                        <Label htmlFor={`price-${fuelKey}`} className={`font-semibold flex items-center gap-2 mb-3 ${
+                          supplierHasFuel ? 'text-slate-700 dark:text-slate-300' : 'text-red-600 dark:text-red-400'
+                        }`}>
+                          <span className={supplierHasFuel ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
+                            {supplierHasFuel ? '💰' : '⚠️'}
+                          </span>
                           {fuelInfo.name}
+                          {!supplierHasFuel && (
+                            <span className="text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 px-2 py-0.5 rounded-full border border-red-300 dark:border-red-700 flex items-center gap-1">
+                              <X className="w-3 h-3" />
+                              Fornecedor não vende
+                            </span>
+                          )}
                           {isMaintained && (
                             <span className="text-xs bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 px-2 py-0.5 rounded-full border border-orange-300 dark:border-orange-700 flex items-center gap-1">
                               <AlertTriangle className="w-3 h-3" />
@@ -848,10 +1238,17 @@ const PriceEntry = () => {
                               id={`price-${fuelKey}`}
                               type="number"
                               step="0.0001"
-                              placeholder="0.0000"
+                              placeholder={supplierHasFuel ? "0.0000" : "Fornecedor não vende"}
                               value={prices[fuelKey] || ''}
                               onChange={e => handlePriceChange(fuelKey, e.target.value)}
-                              className={`pl-14 pr-4 py-3 border-2 ${isMaintained ? 'border-orange-300 dark:border-orange-600 bg-orange-50/50 dark:bg-orange-900/10' : 'border-green-300 dark:border-green-600'} focus:border-green-500 dark:focus:border-green-400 shadow-sm h-14 font-mono text-xl font-semibold group-hover:border-green-400 dark:group-hover:border-green-500 transition-all rounded-2xl`}
+                              disabled={!supplierHasFuel}
+                              className={`pl-14 pr-4 py-3 border-2 ${
+                                !supplierHasFuel 
+                                  ? 'border-red-300 dark:border-red-600 bg-red-50/50 dark:bg-red-900/10 text-red-600 dark:text-red-400 cursor-not-allowed' 
+                                  : isMaintained 
+                                    ? 'border-orange-300 dark:border-orange-600 bg-orange-50/50 dark:bg-orange-900/10' 
+                                    : 'border-green-300 dark:border-green-600'
+                              } focus:border-green-500 dark:focus:border-green-400 shadow-sm h-14 font-mono text-xl font-semibold group-hover:border-green-400 dark:group-hover:border-green-500 transition-all rounded-2xl disabled:opacity-60`}
                             />
                           </div>
                           <Button
@@ -988,7 +1385,7 @@ const PriceEntry = () => {
                           />
                           <label htmlFor={`group-${group.id}`} className="flex-1 cursor-pointer min-w-0">
                             <div className="flex items-center gap-2 mb-3 flex-wrap">
-                              <div className={`p-2 rounded-lg ${isSelected ? 'bg-purple-200 dark:bg-purple-700' : 'bg-purple-100 dark:bg-purple-900/40'}`}>
+                              <div className={`p-3 rounded-xl transition-all ${isSelected ? 'bg-gradient-to-r from-purple-200 to-pink-200 dark:from-purple-700 dark:to-pink-700 shadow-md' : 'bg-gradient-to-r from-purple-100 to-pink-100 dark:from-purple-900/40 dark:to-pink-900/40'}`}>
                                 <Building className={`w-5 h-5 ${isSelected ? 'text-purple-700 dark:text-purple-200' : 'text-purple-600 dark:text-purple-400'}`} />
                               </div>
                               <span className="font-bold text-lg">{group.name}</span>
@@ -1010,71 +1407,196 @@ const PriceEntry = () => {
             </CardContent>
           </Card>
 
-          {/* Preços - Aparece depois de selecionar grupos */}
-          {selectedSupplier && selectedGroups.length > 0 && (
-            <Card className="border-none shadow-xl bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm rounded-3xl overflow-hidden">
-              <CardHeader className="border-b border-slate-200 dark:border-slate-700 bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <CardTitle className="flex items-center gap-2 text-xl">
-                      <DollarSign className="w-5 h-5 text-green-600" />
-                      Preços (R$/L)
-                    </CardTitle>
-                    <CardDescription className="text-base">Preencha os preços dos combustíveis disponíveis</CardDescription>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleLoadLastPrices}
-                    disabled={loadingLastPrices || !selectedSupplier || !selectedBase}
-                    className="border-2 border-green-300 text-green-700 hover:bg-green-50 dark:border-green-700 dark:text-green-400 dark:hover:bg-green-950/20 font-semibold shadow-md hover:shadow-lg transition-all disabled:opacity-50 rounded-xl"
-                  >
-                    <RefreshCw className="w-4 h-4 mr-2" />
-                    {loadingLastPrices ? '⏳ Carregando...' : '🔄 Usar últimos preços'}
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent className="pt-8">
-                <div className="grid md:grid-cols-2 gap-6">
-                  {availableProducts.length > 0 ? availableProducts.map(fuelKey => {
-                    const fuelInfo = settings.fuelTypes[fuelKey];
-                    if (!fuelInfo) return null;
+        </div>
 
-                    return (
-                      <div key={fuelKey} className="group">
-                        <Label htmlFor={`price-${fuelKey}`} className="font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-2 mb-3">
-                          <span className="text-green-600 dark:text-green-400">💰</span>
-                          {fuelInfo.name}
-                        </Label>
-                        <div className="relative">
-                          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 dark:text-slate-400 font-bold text-base">R$</span>
-                          <Input
-                            id={`price-${fuelKey}`}
-                            type="number"
-                            step="0.0001"
-                            placeholder="0.0000"
-                            value={prices[fuelKey] || ''}
-                            onChange={e => handlePriceChange(fuelKey, e.target.value)}
-                            className="pl-14 pr-4 py-3 border-2 border-green-300 dark:border-green-600 focus:border-green-500 dark:focus:border-green-400 shadow-sm h-14 font-mono text-xl font-semibold group-hover:border-green-400 dark:group-hover:border-green-500 transition-all rounded-2xl"
-                          />
+      {/* Status de Atualização dos Grupos */}
+      <div className="max-w-5xl mx-auto mt-12">
+        <Card className="border-none shadow-xl bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm rounded-3xl overflow-hidden">
+          <CardHeader className="border-b border-slate-200 dark:border-slate-700 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20">
+            <CardTitle className="flex items-center gap-2 text-xl">
+              <Building className="w-5 h-5 text-blue-600" />
+              Status de Preços por Grupo e Base
+            </CardTitle>
+            <CardDescription className="text-base">
+              Visualize quais grupos precisam de atualizações em cada base hoje ({getLocalDateString()})
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="pt-6">
+            {loadingGroupsStatus ? (
+              <div className="flex flex-col items-center justify-center py-8 px-4 bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-blue-800 dark:to-indigo-900 rounded-xl border-2 border-dashed border-blue-300 dark:border-blue-700">
+                <RefreshCw className="w-12 h-12 text-blue-400 dark:text-blue-600 mb-3 animate-spin" />
+                <p className="text-center text-blue-600 dark:text-blue-400 font-semibold">
+                  Carregando status dos grupos...
+                </p>
+              </div>
+            ) : groupsWithoutUpdates.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-8 px-4 bg-gradient-to-br from-green-50 to-emerald-100 dark:from-green-800 dark:to-emerald-900 rounded-xl border-2 border-dashed border-green-300 dark:border-green-700">
+                <CheckCircle className="w-12 h-12 text-green-400 dark:text-green-600 mb-3" />
+                <p className="text-center text-green-600 dark:text-green-400 font-semibold text-lg mb-1">
+                  ✅ Todos os grupos atualizados!
+                </p>
+                <p className="text-center text-green-500 dark:text-green-500 text-sm">
+                  Todos os grupos têm preços cadastrados em todas as suas bases hoje
+                </p>
+              </div>
+            ) : (
+              <div className="grid gap-3">
+                {groupsWithoutUpdates.map((group) => {
+                  const isExpanded = expandedGroups.has(group.id);
+                  const pendingBases = group.baseStatuses?.filter(bs => !bs.hasToday) || [];
+                  const updatedBases = group.baseStatuses?.filter(bs => bs.hasToday) || [];
+                  
+                  return (
+                    <div
+                      key={group.id}
+                      className="bg-gradient-to-r from-slate-50 to-slate-100 dark:from-slate-800 dark:to-slate-900 rounded-xl border-2 border-slate-200 dark:border-slate-700 overflow-hidden transition-all"
+                    >
+                      {/* Cabeçalho Clicável do Accordion */}
+                      <div 
+                        className="p-4 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-all"
+                        onClick={() => toggleGroupExpansion(group.id)}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <div className="p-2 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-lg">
+                              <Building className="w-4 h-4 text-white" />
+                            </div>
+                            <div>
+                              <h4 className="font-bold text-lg text-slate-700 dark:text-slate-300">
+                                {group.name}
+                              </h4>
+                              <div className="flex items-center gap-2 mt-1">
+                                <Badge variant="secondary" className="bg-gradient-to-r from-purple-100 to-pink-100 dark:from-purple-900/40 dark:to-pink-900/40 text-purple-700 dark:text-purple-300 border-purple-300 dark:border-purple-700 text-xs">
+                                  {group.bandeira === 'bandeira_branca' ? 'Branca' : group.bandeira}
+                                </Badge>
+                                <Badge variant="secondary" className="bg-gradient-to-r from-blue-100 to-indigo-100 dark:from-blue-900/40 dark:to-indigo-900/40 text-blue-700 dark:text-blue-300 border-blue-300 dark:border-blue-700 text-xs">
+                                  {group.postos} posto(s)
+                                </Badge>
+                              </div>
+                            </div>
+                          </div>
+                          
+                          <div className="flex items-center gap-3">
+                            {/* Status Resumido */}
+                            <div className="flex items-center gap-2 text-sm">
+                              {updatedBases.length > 0 && (
+                                <div className="flex items-center gap-1 text-green-600 dark:text-green-400">
+                                  <CheckCircle className="w-4 h-4" />
+                                  <span>{updatedBases.length}</span>
+                                </div>
+                              )}
+                              {pendingBases.length > 0 && (
+                                <div className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                                  <AlertTriangle className="w-4 h-4" />
+                                  <span>{pendingBases.length}</span>
+                                </div>
+                              )}
+                            </div>
+                            
+                            {/* Ícone de Expansão */}
+                            {isExpanded ? (
+                              <ChevronDown className="w-5 h-5 text-slate-500 transition-transform" />
+                            ) : (
+                              <ChevronRight className="w-5 h-5 text-slate-500 transition-transform" />
+                            )}
+                          </div>
                         </div>
                       </div>
-                    );
-                  }) : (
-                    <div className="col-span-2 flex flex-col items-center justify-center py-12 px-4 bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 rounded-2xl border-2 border-dashed border-green-300 dark:border-green-700">
-                      <DollarSign className="w-16 h-16 text-green-500 dark:text-green-600 mb-4" />
-                      <p className="text-center text-green-700 dark:text-green-300 font-semibold text-lg">
-                        Selecione um fornecedor que possui produtos cadastrados
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          )}
 
-        </div>
+                      {/* Conteúdo Colapsável */}
+                      {isExpanded && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.2 }}
+                          className="border-t border-slate-200 dark:border-slate-700"
+                        >
+                          <div className="p-6">
+                            <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+                              {group.baseStatuses?.map((baseStatus) => (
+                                <div
+                                  key={baseStatus.base.id}
+                                  className={`p-6 rounded-2xl border-2 transition-all shadow-sm hover:shadow-md ${
+                                    baseStatus.hasToday
+                                      ? 'bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 border-green-300 dark:border-green-700'
+                                      : 'bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 border-amber-300 dark:border-amber-700'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-3 mb-4">
+                                    <MapPin className="w-5 h-5 text-slate-600 dark:text-slate-400" />
+                                    <span className="font-bold text-lg text-slate-700 dark:text-slate-300">
+                                      {baseStatus.base.name}
+                                    </span>
+                                    {baseStatus.hasToday ? (
+                                      <CheckCircle className="w-5 h-5 text-green-600 dark:text-green-400" />
+                                    ) : (
+                                      <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                                    )}
+                                  </div>
+
+                                  {baseStatus.hasToday ? (
+                                    <div className="text-sm text-green-600 dark:text-green-400 space-y-2">
+                                      <p className="font-bold text-base">✅ Atualizado hoje</p>
+                                      {baseStatus.supplierProgress && (
+                                        <p className="font-bold text-blue-700 dark:text-blue-300 text-base">
+                                          📊 {baseStatus.supplierProgress.inserted}/{baseStatus.supplierProgress.total} fornecedores
+                                        </p>
+                                      )}
+                                      {baseStatus.todaySupplier && !baseStatus.supplierProgress && (
+                                        <p className="mt-1">Fornecedor: {baseStatus.todaySupplier}</p>
+                                      )}
+                                      {baseStatus.supplierProgress && baseStatus.supplierProgress.supplierNames.length > 0 && (
+                                        <p className="text-slate-600 dark:text-slate-400 mt-1 leading-relaxed">
+                                          {baseStatus.supplierProgress.supplierNames.join(', ')}
+                                        </p>
+                                      )}
+                                      {baseStatus.todayTimestamp && (
+                                        <p className="mt-2 font-medium">
+                                          🕐 {new Date(baseStatus.todayTimestamp).toLocaleString('pt-BR')}
+                                        </p>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <div className="text-sm text-amber-600 dark:text-amber-400 space-y-2">
+                                      <p className="font-bold text-base">⚠️ Pendente</p>
+                                      {baseStatus.supplierProgress && (
+                                        <p className="font-bold text-blue-700 dark:text-blue-300 text-base">
+                                          📊 {baseStatus.supplierProgress.inserted}/{baseStatus.supplierProgress.total} fornecedores
+                                        </p>
+                                      )}
+                                      {baseStatus.supplierProgress && baseStatus.supplierProgress.supplierNames.length > 0 && (
+                                        <p className="text-slate-600 dark:text-slate-400 mt-1 leading-relaxed">
+                                          Inseridos: {baseStatus.supplierProgress.supplierNames.join(', ')}
+                                        </p>
+                                      )}
+                                      {baseStatus.lastUpdate ? (
+                                        <div className="mt-2 space-y-1">
+                                          <p className="font-medium">Última: {new Date(baseStatus.lastUpdate.displayDate).toLocaleDateString('pt-BR')}</p>
+                                          <p className="font-medium">🕐 {new Date(baseStatus.lastUpdate.createdAt).toLocaleString('pt-BR')}</p>
+                                          {baseStatus.lastUpdate.supplier && (
+                                            <p>Fornecedor: {baseStatus.lastUpdate.supplier}</p>
+                                          )}
+                                        </div>
+                                      ) : (
+                                        <p className="text-red-600 dark:text-red-400 font-bold text-base mt-2">Nunca atualizado</p>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </motion.div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
       {/* Últimos Preços Adicionados */}
       <div className="max-w-5xl mx-auto mt-12">
@@ -1090,13 +1612,44 @@ const PriceEntry = () => {
                   Histórico dos últimos preços cadastrados no sistema
                 </CardDescription>
               </div>
-              <div className="flex flex-col gap-2 min-w-[280px]">
-                <Label htmlFor="filter-date" className="text-xs font-semibold text-slate-700 dark:text-slate-300">Filtrar por Data</Label>
-                <DatePicker
-                  value={recentPricesFilterDate}
-                  onChange={setRecentPricesFilterDate}
-                  className="w-full"
-                />
+              <div className="flex flex-col sm:flex-row gap-4 min-w-[280px]">
+                <div className="flex flex-col gap-2 flex-1">
+                  <Label htmlFor="filter-date" className="text-xs font-semibold text-slate-700 dark:text-slate-300">Filtrar por Data</Label>
+                  <DatePicker
+                    value={recentPricesFilterDate}
+                    onChange={setRecentPricesFilterDate}
+                    className="w-full"
+                  />
+                </div>
+                <div className="flex flex-col gap-2 flex-1">
+                  <Label htmlFor="filter-posto" className="text-xs font-semibold text-slate-700 dark:text-slate-300">Filtrar por Posto</Label>
+                  <Select value={recentPricesFilterPosto} onValueChange={setRecentPricesFilterPosto}>
+                    <SelectTrigger className="border-2 border-slate-300 dark:border-slate-600 focus:border-blue-500 dark:focus:border-blue-400 shadow-sm h-10 rounded-xl">
+                      <SelectValue placeholder="Todos os postos" />
+                    </SelectTrigger>
+                    <SelectContent className="border-2 shadow-xl rounded-xl">
+                      <SelectItem value="all" className="hover:bg-blue-50 dark:hover:bg-blue-950/20 rounded-lg">
+                        <div className="flex items-center gap-2">
+                          <Building className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+                          Todos os postos
+                        </div>
+                      </SelectItem>
+                      {postos
+                        .sort((a, b) => a.name.localeCompare(b.name))
+                        .map(posto => (
+                        <SelectItem key={posto.id} value={posto.name} className="hover:bg-blue-50 dark:hover:bg-blue-950/20 rounded-lg">
+                          <div className="flex items-center gap-2">
+                            <Building className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                            {posto.name}
+                            <Badge variant="secondary" className="ml-2 bg-gradient-to-r from-purple-100 to-pink-100 dark:from-purple-900/40 dark:to-pink-900/40 text-purple-700 dark:text-purple-300 border-purple-300 dark:border-purple-700 text-xs">
+                              {posto.bandeira === 'bandeira_branca' ? 'Branca' : posto.bandeira}
+                            </Badge>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
             </div>
           </CardHeader>
@@ -1128,7 +1681,7 @@ const PriceEntry = () => {
                     >
                       <div className="flex items-center gap-4">
                         <div className="flex items-center gap-2">
-                          <div className="p-2 bg-blue-100 dark:bg-blue-900/40 rounded-lg">
+                          <div className="p-3 bg-gradient-to-r from-blue-100 to-indigo-100 dark:from-blue-900/40 dark:to-indigo-900/40 rounded-xl shadow-md">
                             <MapPin className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                           </div>
                           <div>
@@ -1155,7 +1708,7 @@ const PriceEntry = () => {
                         </div>
                         <div className="text-right">
                           <p className="font-bold text-2xl text-green-600 dark:text-green-400 font-mono">
-                            R$ {parseFloat(item.price).toFixed(4)}
+                            R$ {(parseFloat(item.price) || 0).toFixed(4)}
                           </p>
                         </div>
                       </div>
@@ -1262,7 +1815,7 @@ const PriceEntry = () => {
                     <div key={fuelKey} className="p-3 bg-white/60 dark:bg-slate-800/60 rounded-xl">
                       <p className="text-xs text-muted-foreground">{fuelInfo?.name}</p>
                       <p className="font-bold text-lg text-yellow-900 dark:text-yellow-100">
-                        R$ {parseFloat(price).toFixed(4)}
+                        R$ {(parseFloat(price) || 0).toFixed(4)}
                       </p>
                     </div>
                   );
@@ -1306,7 +1859,7 @@ const PriceEntry = () => {
                 className="p-4 bg-gradient-to-r from-red-50 to-orange-50 dark:from-red-900/20 dark:to-orange-900/20 rounded-lg border-2 border-red-300 dark:border-red-700"
               >
                 <div className="flex items-start gap-3">
-                  <div className="p-2 bg-red-100 dark:bg-red-900/40 rounded-lg mt-0.5">
+                  <div className="p-3 bg-gradient-to-r from-red-100 to-orange-100 dark:from-red-900/40 dark:to-orange-900/40 rounded-xl shadow-md mt-0.5">
                     <X className="w-5 h-5 text-red-600 dark:text-red-400" />
                   </div>
                   <div className="flex-1">

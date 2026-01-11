@@ -395,9 +395,9 @@ const FreightDetail = () => {
       };
     }
 
-    const min = Math.min(...allCosts);
-    const max = Math.max(...allCosts);
-    const average = allCosts.reduce((acc, value) => acc + value, 0) / allCosts.length;
+    const min = allCosts.length > 0 ? Math.min(...allCosts) : 0;
+    const max = allCosts.length > 0 ? Math.max(...allCosts) : 0;
+    const average = allCosts.length > 0 ? allCosts.reduce((acc, value) => acc + value, 0) / allCosts.length : 0;
 
     return {
       count: totalRoutes,
@@ -419,7 +419,7 @@ const FreightDetail = () => {
     return computePearsonCorrelation(points, {
       xKey: 'distanceKm',
       yKey: 'costPerLiter',
-      minPoints: 1,
+      minPoints: 3,
     });
   }, [preparedRows]);
 

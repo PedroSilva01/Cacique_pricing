@@ -36,7 +36,29 @@ const InitialComparison = ({ dailyPrices, settings, postos, freightRoutes }) => 
       const basePrice = priceEntry.prices[selectedFuel];
       if (basePrice === undefined || basePrice === null) return null;
 
-      const routeInfo = freightRoutes.find(r => r.origin_city_id === supplier.city_id && r.destination_posto_id === destinationPostoId);
+      // Buscar melhor rota de frete das bases do fornecedor para o posto
+      const destinationPosto = postos.find(p => p.id === destinationPostoId);
+      if (!destinationPosto?.city_id) return null;
+      
+      let bestRoute = null;
+      let minCost = Infinity;
+      
+      (supplier.city_ids || []).forEach(baseCityId => {
+        const route = freightRoutes.find(r => 
+          r.origin_city_id === baseCityId && 
+          r.destination_city_id === destinationPosto.city_id
+        );
+        if (route) {
+          const costs = Object.values(route.costs || {}).filter(c => typeof c === 'number' && c > 0);
+          const routeCost = costs.length > 0 ? Math.min(...costs) : 0;
+          if (routeCost < minCost) {
+            minCost = routeCost;
+            bestRoute = route;
+          }
+        }
+      });
+      
+      const routeInfo = bestRoute;
       const freightCost = routeInfo?.costs?.carreta ?? 0;
       const finalPrice = basePrice + freightCost;
 

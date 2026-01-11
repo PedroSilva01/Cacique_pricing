@@ -15,7 +15,7 @@ export const generatePdf = (reportData) => {
   
   doc.setFontSize(14);
   doc.setTextColor(0);
-  doc.text(`Análise para ${selectedFuel} com Destino: ${defaultDestination}`, 14, 45);
+  doc.text(`Análise para ${selectedFuel || 'N/A'} com Destino: ${defaultDestination}`, 14, 45);
 
   const tableColumn = ["#", "Fornecedor", "Preço/L", "Frete/L", "Preço Final/L"];
   const tableRows = [];

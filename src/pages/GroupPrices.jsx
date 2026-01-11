@@ -35,21 +35,87 @@ const GroupPrices = () => {
 
   const [selectedGroup, setSelectedGroup] = useState('');
   const [selectedBase, setSelectedBase] = useState('');
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState(() => {
+    const today = new Date();
+    return today.toISOString().split('T')[0];
+  });
+
   const [groupData, setGroupData] = useState(null);
   const [priceData, setPriceData] = useState({});
   const [stationPrices, setStationPrices] = useState({}); // Individual station prices
-  const [editingMode, setEditingMode] = useState(false);
+  const [targetPrices, setTargetPrices] = useState({}); // Target prices for the group (with base)
+  const [manuallyMarkedIncorrect, setManuallyMarkedIncorrect] = useState(new Set());
+
   const [selectedPostos, setSelectedPostos] = useState([]);
   const [bulkPrice, setBulkPrice] = useState({});
-  const [manuallyMarkedIncorrect, setManuallyMarkedIncorrect] = useState(new Set());
-  const [targetPrices, setTargetPrices] = useState({}); // Target prices for the group (with base)
+
+  const [editMode, setEditMode] = useState(false);
+  const [editingPrices, setEditingPrices] = useState({}); // Target prices for the group (with base)
   const reportRef = useRef(null);
 
   useEffect(() => {
     if (!userId) return;
     fetchData();
   }, [userId]);
+
+  // Subscriptions realtime para GroupPrices - preços e configurações críticas
+  useEffect(() => {
+    if (!userId) return;
+
+    console.log('🔄 GroupPrices: Configurando subscriptions realtime...');
+    
+    // Subscription para daily_prices (crítico - preços mudam constantemente)
+    const dailyPricesSubscription = supabase
+      .channel('groupprices_daily_prices')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'daily_prices',
+        filter: `user_id=eq.${userId}`
+      }, (payload) => {
+        console.log('🔄 GroupPrices: daily_prices update:', payload);
+        // Recarregar preços se grupo e data estão selecionados
+        if (selectedGroup && selectedDate) {
+          loadGroupPrices();
+        }
+      })
+      .subscribe();
+
+    // Subscription para groups (configurações de grupos podem mudar)
+    const groupsSubscription = supabase
+      .channel('groupprices_groups')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'groups',
+        filter: `user_id=eq.${userId}`
+      }, (payload) => {
+        console.log('🔄 GroupPrices: groups update:', payload);
+        fetchData(); // Recarrega dados mestres
+      })
+      .subscribe();
+
+    // Subscription para postos (alterações em postos afetam grupos)
+    const postosSubscription = supabase
+      .channel('groupprices_postos')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'postos',
+        filter: `user_id=eq.${userId}`
+      }, (payload) => {
+        console.log('🔄 GroupPrices: postos update:', payload);
+        fetchData();
+      })
+      .subscribe();
+
+    return () => {
+      console.log('🔄 GroupPrices: Removendo subscriptions realtime...');
+      dailyPricesSubscription.unsubscribe();
+      groupsSubscription.unsubscribe();
+      postosSubscription.unsubscribe();
+    };
+  }, [userId, selectedGroup, selectedBase, selectedDate]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -82,8 +148,9 @@ const GroupPrices = () => {
           ...(rawSettings.vehicleTypes || {}),
         },
         fuelTypes: {
-          ...(rawSettings.fuelTypes || {}),
+          // CORRIGIDO: Primeiro defaultSettings, depois rawSettings para permitir sobrescrita
           ...(defaultSettings.fuelTypes || {}),
+          ...(rawSettings.fuelTypes || {}),
         },
       };
 
@@ -97,13 +164,14 @@ const GroupPrices = () => {
   };
 
   useEffect(() => {
-    if (selectedGroup && selectedBase && selectedDate) {
+    if (selectedGroup && selectedDate) {
       loadGroupPrices();
     }
-  }, [selectedGroup, selectedBase, selectedDate]);
+  }, [selectedGroup, selectedDate, selectedBase]);
 
   const loadGroupPrices = async () => {
     if (!selectedGroup || !selectedDate) return;
+
 
     const group = groups.find(g => g.id === selectedGroup);
     if (!group) return;
@@ -116,13 +184,23 @@ const GroupPrices = () => {
 
     // Carregar preços do dia para todos os postos do grupo
     try {
+
       const [pricesRes, stationPricesRes] = await Promise.all([
-        supabase
-          .from('daily_prices')
-          .select('*')
-          .eq('user_id', userId)
-          .eq('date', selectedDate)
-          .in('group_ids', [selectedGroup]),
+        (() => {
+          let query = supabase
+            .from('daily_prices')
+            .select('*, suppliers(name)')
+            .eq('user_id', userId)
+            .eq('date', selectedDate)
+            .contains('group_ids', [selectedGroup]);
+          
+          // CORRIGIDO: Filtrar por base quando selecionada
+          if (selectedBase) {
+            query = query.eq('base_city_id', selectedBase);
+          }
+          
+          return query;
+        })(),
         supabase
           .from('station_prices')
           .select('*')
@@ -131,30 +209,69 @@ const GroupPrices = () => {
           .in('station_id', groupPostos.map(p => p.id))
       ]);
 
+      console.log('🔍 DEBUG GroupPrices - Resultados das queries:', {
+        pricesRes: {
+          data: pricesRes.data,
+          error: pricesRes.error,
+          count: pricesRes.data?.length || 0
+        },
+        stationPricesRes: {
+          data: stationPricesRes.data,
+          error: stationPricesRes.error,
+          count: stationPricesRes.data?.length || 0
+        }
+      });
+
       if (pricesRes.error) throw pricesRes.error;
       if (stationPricesRes.error) throw stationPricesRes.error;
 
       const pricesByPosto = {};
       const stationPricesByPosto = {};
       
-      // Get group prices (base prices)
+      // CORRIGIDO: Lógica melhorada para Bandeira Branca vs outras bandeiras
       groupPostos.forEach(posto => {
         pricesByPosto[posto.id] = {};
       });
 
-      pricesRes.data?.forEach(price => {
-        price.group_ids?.forEach(groupId => {
-          if (groupId === selectedGroup) {
+      // Carregar preços do fornecedor selecionado (se houver)
+      if (selectedSupplier) {
+        // Se um fornecedor específico foi selecionado, usar apenas seus preços
+        const selectedSupplierPrices = pricesRes.data?.find(price => 
+          price.supplier_id === selectedSupplier && 
+          price.group_ids?.includes(selectedGroup)
+        );
+        
+        if (selectedSupplierPrices) {
+          groupPostos.forEach(posto => {
+            pricesByPosto[posto.id] = selectedSupplierPrices.prices || {};
+          });
+        }
+      } else {
+        // Se nenhum fornecedor selecionado, usar preços do grupo
+        pricesRes.data?.forEach(price => {
+          if (price.group_ids?.includes(selectedGroup)) {
             groupPostos.forEach(posto => {
-              pricesByPosto[posto.id] = price.prices || {};
+              // Para Bandeira Branca, usar o primeiro preço encontrado como base
+              if (!pricesByPosto[posto.id] || Object.keys(pricesByPosto[posto.id]).length === 0) {
+                pricesByPosto[posto.id] = price.prices || {};
+              }
             });
           }
         });
-      });
+      }
 
-      // Get individual station prices
+      // Get individual station prices (sobrescreve se existir)
       stationPricesRes.data?.forEach(sp => {
         stationPricesByPosto[sp.station_id] = sp.prices || {};
+      });
+
+      console.log('🔍 DEBUG GroupPrices - Estados finais sendo definidos:', {
+        pricesByPosto,
+        stationPricesByPosto,
+        priceData: Object.keys(pricesByPosto).length,
+        stationPrices: Object.keys(stationPricesByPosto).length,
+        selectedDate,
+        groupData: groupData?.name
       });
 
       setPriceData(pricesByPosto);
@@ -194,7 +311,10 @@ const GroupPrices = () => {
   const getMinGroupPrices = () => {
     const minPrices = {};
     Object.keys(settings.fuelTypes || {}).forEach(fuel => {
-      const prices = Object.values(priceData).map(p => p[fuel]).filter(p => p !== undefined && p !== null);
+      const prices = Object.values(priceData)
+        .map(p => p[fuel])
+        .filter(p => p !== undefined && p !== null && !isNaN(p) && p > 0);
+      
       if (prices.length > 0) {
         minPrices[fuel] = Math.min(...prices);
       }
@@ -224,6 +344,62 @@ const GroupPrices = () => {
     } catch (err) {
       console.error('Erro ao salvar preços alvo:', err);
       showErrorToast(toast, { title: 'Erro ao salvar preços alvo', error: err });
+    }
+  };
+
+  const handleSaveEditedPrices = async () => {
+    if (!selectedGroup || !selectedDate || Object.keys(editingPrices).length === 0) return;
+
+    setSaving(true);
+    try {
+      // Salvar preços editados como station_prices para cada posto
+      const stationPricesUpdates = [];
+      
+      Object.entries(editingPrices).forEach(([postoId, prices]) => {
+        if (Object.keys(prices).length > 0) {
+          stationPricesUpdates.push({
+            user_id: userId,
+            station_id: postoId,
+            date: selectedDate,
+            prices: prices
+          });
+        }
+      });
+
+      if (stationPricesUpdates.length > 0) {
+        // Primeiro, deletar registros existentes para esta data e postos
+        const { error: deleteError } = await supabase
+          .from('station_prices')
+          .delete()
+          .eq('user_id', userId)
+          .eq('date', selectedDate)
+          .in('station_id', Object.keys(editingPrices));
+
+        if (deleteError) throw deleteError;
+
+        // Depois, inserir novos registros
+        const { error: insertError } = await supabase
+          .from('station_prices')
+          .insert(stationPricesUpdates);
+
+        if (insertError) throw insertError;
+      }
+
+      toast({
+        title: '✅ Preços salvos!',
+        description: `Preços individuais salvos para ${stationPricesUpdates.length} posto(s).`
+      });
+
+      // Recarregar dados para refletir mudanças
+      loadGroupPrices();
+      setEditMode(false);
+      setEditingPrices({});
+
+    } catch (err) {
+      console.error('Erro ao salvar preços editados:', err);
+      showErrorToast(toast, { title: 'Erro ao salvar preços', error: err });
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -259,10 +435,49 @@ const GroupPrices = () => {
     const key = `${postoId}-${fuel}`;
     if (manuallyMarkedIncorrect.has(key)) return true;
     
-    const targetPrice = targetPrices[fuel];
+    // CORRIGIDO: Buscar target price considerando base selecionada
+    const targetPriceKey = selectedBase ? `${fuel}_${selectedBase}` : fuel;
+    const targetPrice = targetPrices[targetPriceKey] || targetPrices[fuel];
     if (!targetPrice) return false;
     
-    return price && (price - targetPrice) >= 0.01;
+    return price && (price - targetPrice) >= 0.02;
+  };
+
+  // NOVO: Função para determinar quais combustíveis o grupo realmente vende
+  const getAvailableFuelsForGroup = () => {
+    if (!groupData || !priceData) return Object.keys(settings.fuelTypes || {});
+    
+    const availableFuels = new Set();
+    
+    // Verificar em todos os postos do grupo quais combustíveis têm preços
+    groupData.postos?.forEach(posto => {
+      const postoPrices = priceData[posto.id] || {};
+      Object.entries(postoPrices).forEach(([fuelType, price]) => {
+        if (price && price > 0) {
+          availableFuels.add(fuelType);
+        }
+      });
+    });
+
+    // Se não encontrou combustíveis específicos, verificar nos dados dos fornecedores (para Bandeira Branca)
+    if (availableFuels.size === 0 && supplierInfo && Object.keys(supplierInfo).length > 0) {
+      Object.keys(supplierInfo).forEach(fuelType => {
+        availableFuels.add(fuelType);
+      });
+    }
+
+    // Fallback: se ainda não encontrou nada, retornar todos
+    if (availableFuels.size === 0) {
+      return Object.keys(settings.fuelTypes || {});
+    }
+
+    console.log('🔍 DEBUG - Combustíveis disponíveis para o grupo:', {
+      group: groupData.name,
+      availableFuels: Array.from(availableFuels),
+      totalFuels: Object.keys(settings.fuelTypes || {}).length
+    });
+
+    return Array.from(availableFuels);
   };
 
   const exportToPNG = async () => {
@@ -270,19 +485,55 @@ const GroupPrices = () => {
     
     try {
       const canvas = await html2canvas(reportRef.current, {
-        scale: 2,
-        backgroundColor: '#ffffff'
+        scale: 4, 
+        backgroundColor: '#ffffff',
+        useCORS: true,
+        allowTaint: false,
+        logging: false,
+        width: reportRef.current.scrollWidth,
+        height: reportRef.current.scrollHeight,
+        scrollX: 0,
+        scrollY: 0,
+        onclone: (clonedDoc) => {
+          // Melhorar estilos para impressão/export
+          const clonedElement = clonedDoc.querySelector('[data-export-target]') || clonedDoc.body;
+          clonedElement.style.padding = '40px';
+          clonedElement.style.backgroundColor = '#ffffff';
+          clonedElement.style.fontFamily = 'system-ui, -apple-system, sans-serif';
+          
+          // Melhorar qualidade dos textos
+          const allTexts = clonedDoc.querySelectorAll('*');
+          allTexts.forEach(el => {
+            el.style.WebkitFontSmoothing = 'antialiased';
+            el.style.MozOsxFontSmoothing = 'grayscale';
+          });
+        }
       });
       
+      // MELHORADO: Nome de arquivo mais informativo
+      const dateFormatted = selectedDate ? (() => {
+        const [year, month, day] = selectedDate.split('-');
+        return `${day}-${month}-${year}`;
+      })() : 'data-nao-definida';
+      
+      const filename = `relatorio-precos-${groupData?.name?.toLowerCase().replace(/[^a-z0-9]/g, '-') || 'grupo'}-${dateFormatted}.png`;
+      
       const link = document.createElement('a');
-      link.download = `precos-grupo-${groupData?.name || 'sem-nome'}-${selectedDate}.png`;
-      link.href = canvas.toDataURL();
+      link.download = filename;
+      link.href = canvas.toDataURL('image/png', 1.0); // Qualidade máxima
       link.click();
       
-      toast({ title: '✅ Exportado como PNG!' });
+      toast({ 
+        title: '📸 PNG Exportado!',
+        description: `Qualidade: ${canvas.width}x${canvas.height}px`
+      });
     } catch (err) {
       console.error('Erro ao exportar PNG:', err);
-      showErrorToast(toast, { title: 'Erro ao exportar', error: err });
+      toast({ 
+        title: '❌ Erro ao exportar PNG', 
+        description: 'Tente novamente ou contate o suporte.',
+        variant: 'destructive' 
+      });
     }
   };
 
@@ -468,10 +719,10 @@ const GroupPrices = () => {
             </CardHeader>
             <CardContent>
               <div className="grid md:grid-cols-4 gap-4">
-                {Object.keys(settings.fuelTypes || {}).map(fuel => (
+                {getAvailableFuelsForGroup().map(fuel => (
                   <div key={fuel}>
                     <Label htmlFor={`target-${fuel}`}>
-                      {settings.fuelTypes[fuel].name}
+                      {settings.fuelTypes[fuel]?.name || fuel}
                     </Label>
                     <Input
                       id={`target-${fuel}`}
@@ -503,9 +754,27 @@ const GroupPrices = () => {
             <CardHeader>
               <div className="flex items-center justify-between">
                 <div>
-                  <CardTitle>Postos do Grupo</CardTitle>
-                  <CardDescription>
-                    {groupData.postos.length} posto(s) encontrados
+                  <CardTitle>Postos do Grupo: {groupData?.name}</CardTitle>
+                  <CardDescription className="text-base">
+                    <span className="flex flex-wrap items-center gap-3 text-slate-600 dark:text-slate-400">
+                      <span className="flex items-center gap-1">
+                        🏪 {groupData.postos.length} posto(s)
+                      </span>
+                      <span className="flex items-center gap-1">
+                        🏢 {baseCities.find(b => b.id === selectedBase)?.name || 'Todas as Bases'}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        📅 {selectedDate ? (() => {
+                          const [year, month, day] = selectedDate.split('-');
+                          return `${day}/${month}/${year}`;
+                        })() : 'N/A'}
+                      </span>
+                      {groupData?.bandeira === 'bandeira_branca' && (
+                        <span className="flex items-center gap-1 text-green-600 dark:text-green-400 font-semibold">
+                          💰 Menores preços
+                        </span>
+                      )}
+                    </span>
                   </CardDescription>
                 </div>
                 <div className="flex gap-2">
@@ -571,138 +840,178 @@ const GroupPrices = () => {
                 </Alert>
               )}
               <div ref={reportRef} className="bg-white p-4">
-                <div className="mb-4 text-center">
-                  <h2 className="text-2xl font-bold">Relatório de Preços - {groupData?.name || ''}</h2>
-                  <p className="text-sm text-muted-foreground">Data: {new Date(selectedDate).toLocaleDateString('pt-BR')}</p>
+                <div className="mb-6 border-b border-slate-200 dark:border-slate-700 pb-6">
+                  <h2 className="text-2xl font-semibold text-slate-900 dark:text-slate-100 mb-4">
+                    Relatório de Preços - {groupData?.name || 'Grupo Selecionado'}
+                  </h2>
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-sm">
+                    <div className="bg-slate-50 dark:bg-slate-800 p-3 rounded-lg">
+                      <div className="text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wide font-medium">Data</div>
+                      <div className="font-semibold text-slate-900 dark:text-slate-100">
+                        {selectedDate ? (() => {
+                          const [year, month, day] = selectedDate.split('-');
+                          return `${day}/${month}/${year}`;
+                        })() : 'N/A'}
+                      </div>
+                    </div>
+                    <div className="bg-slate-50 dark:bg-slate-800 p-3 rounded-lg">
+                      <div className="text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wide font-medium">Base</div>
+                      <div className="font-semibold text-slate-900 dark:text-slate-100">
+                        {baseCities.find(b => b.id === selectedBase)?.name || 'Todas as Bases'}
+                      </div>
+                    </div>
+                    <div className="bg-slate-50 dark:bg-slate-800 p-3 rounded-lg">
+                      <div className="text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wide font-medium">Postos</div>
+                      <div className="font-semibold text-slate-900 dark:text-slate-100">
+                        {groupData?.postos.length || 0}
+                      </div>
+                    </div>
+                    <div className="bg-slate-50 dark:bg-slate-800 p-3 rounded-lg">
+                      <div className="text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wide font-medium">Tipo</div>
+                      <div className="font-semibold text-slate-900 dark:text-slate-100">
+                        {groupData?.bandeira === 'bandeira_branca' ? 'Bandeira Branca' : 'Bandeira Própria'}
+                      </div>
+                    </div>
+                  </div>
+                  {groupData?.bandeira === 'bandeira_branca' && (
+                    <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                      <p className="text-sm text-blue-800 dark:text-blue-200 font-medium">
+                        Exibindo preços mais competitivos por fornecedor
+                      </p>
+                    </div>
+                  )}
                 </div>
                 <Table>
                   <TableHeader>
-                    <TableRow>
-                      {editingMode && <TableHead className="w-12"></TableHead>}
-                      <TableHead>Posto</TableHead>
-                      <TableHead>Cidade</TableHead>
-                      <TableHead>Base</TableHead>
-                      {Object.keys(settings.fuelTypes || {}).map(fuel => (
-                        <TableHead key={fuel} className="text-right">
-                          {settings.fuelTypes[fuel].name}
-                        </TableHead>
-                      ))}
-                      {Object.keys(settings.fuelTypes || {}).map(fuel => (
-                        <TableHead key={`diff-${fuel}`} className="text-right">
-                          Diferença
+                    <TableRow className="bg-slate-100 dark:bg-slate-800 border-b-2 border-slate-200 dark:border-slate-700">
+                      <TableHead className="font-semibold text-left text-slate-700 dark:text-slate-300 py-4">
+                        <div className="space-y-1">
+                          <div>Combustível</div>
+                          {groupData?.bandeira === 'bandeira_branca' && (
+                            <div className="text-xs text-slate-500 dark:text-slate-400 font-normal">
+                              Fornecedor mais competitivo
+                            </div>
+                          )}
+                        </div>
+                      </TableHead>
+                      {groupData.postos.map(posto => (
+                        <TableHead key={posto.id} className="text-center font-semibold text-slate-700 dark:text-slate-300 py-4">
+                          <div className="space-y-1">
+                            <div>{posto.name}</div>
+                            <div className="text-xs text-slate-500 dark:text-slate-400 font-normal">
+                              {posto.cities?.name}
+                            </div>
+                          </div>
                         </TableHead>
                       ))}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {groupData.postos.map(posto => {
-                      const postoPrices = priceData[posto.id] || {};
-                      const isExpensive = Object.keys(settings.fuelTypes || {}).some(fuel => {
-                        const price = postoPrices[fuel];
-                        const targetPrice = targetPrices[fuel];
-                        return price && targetPrice && (price - targetPrice) >= 0.01;
-                      });
-
-                      // Find the base that supplies this station (simplified logic)
-                      const supplyingBase = baseCities[0]?.name || 'N/D';
-
+                    {getAvailableFuelsForGroup().map(fuel => {
+                      const fuelComparison = priceComparisons[fuel];
+                      
                       return (
-                        <TableRow key={posto.id} className={isExpensive ? 'bg-red-50 dark:bg-red-950/20' : ''}>
-                          {editingMode && (
-                            <TableCell>
-                              <Checkbox
-                                checked={selectedPostos.includes(posto.id)}
-                                onCheckedChange={() => handlePostoSelect(posto.id)}
-                              />
-                            </TableCell>
-                          )}
-                          <TableCell className="font-medium">
-                            <div className="flex items-center gap-2">
-                              {posto.name}
-                              {posto.bandeira && <BrandBadge bandeira={posto.bandeira} size="xs" />}
-                              {isExpensive && (
-                                <AlertTriangle className="w-4 h-4 text-red-500" />
+                        <TableRow key={fuel} className="border-b border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800">
+                          {/* Primeira coluna: Nome do combustível + informação do fornecedor */}
+                          <TableCell className="font-medium py-4">
+                            <div className="space-y-3">
+                              <div className="font-semibold text-base text-slate-900 dark:text-slate-100">
+                                {settings.fuelTypes[fuel]?.name || fuel}
+                              </div>
+                              {groupData?.bandeira === 'bandeira_branca' && fuelComparison && (
+                                <div className="space-y-2 pl-4 border-l-2 border-slate-300 dark:border-slate-600">
+                                  <div className="grid grid-cols-1 gap-1">
+                                    <div className="text-sm">
+                                      <span className="text-slate-600 dark:text-slate-400">Melhor oferta:</span>
+                                      <span className="ml-2 font-medium text-slate-900 dark:text-slate-100">
+                                        {fuelComparison.cheapest?.supplier || 'N/D'}
+                                      </span>
+                                      <span className="ml-2 font-mono text-emerald-600 dark:text-emerald-400 font-semibold">
+                                        R$ {fuelComparison.cheapest?.price?.toFixed(4) || '0.0000'}
+                                      </span>
+                                    </div>
+                                    {fuelComparison.secondCheapest && (
+                                      <div className="text-xs text-slate-500 dark:text-slate-400">
+                                        <span>Segunda opção: {fuelComparison.secondCheapest.supplier}</span>
+                                        <span className="ml-2 font-mono">
+                                          R$ {fuelComparison.secondCheapest.price.toFixed(4)}
+                                        </span>
+                                        <span className="ml-2 text-amber-600 dark:text-amber-400 font-medium">
+                                          (+R$ {fuelComparison.difference.toFixed(4)})
+                                        </span>
+                                      </div>
+                                    )}
+                                    <div className="text-xs text-slate-400 dark:text-slate-500">
+                                      {fuelComparison.totalSuppliers} fornecedores avaliados
+                                    </div>
+                                  </div>
+                                </div>
                               )}
                             </div>
                           </TableCell>
-                          <TableCell>{posto.cities?.name}</TableCell>
-                          <TableCell className="text-sm">{supplyingBase}</TableCell>
-                          {Object.keys(settings.fuelTypes || {}).map(fuel => {
+
+                          {/* Colunas dos postos: preços */}
+                          {groupData.postos.map(posto => {
+                            const postoPrices = priceData[posto.id] || {};
                             const price = postoPrices[fuel];
                             const targetPrice = targetPrices[fuel];
-                            const isIncorrect = isPriceIncorrect(posto.id, fuel, price);
+                            const isIncorrect = targetPrice && price && Math.abs(price - targetPrice) >= 0.02;
                             
+                            // Para Bandeira Branca, buscar fornecedor específico deste posto para este combustível
+                            let postoSupplier = null;
+                            let isBestPrice = false;
+                            
+                            if (groupData?.bandeira === 'bandeira_branca') {
+                              postoSupplier = supplierInfo[posto.id] && supplierInfo[posto.id][fuel] 
+                                ? supplierInfo[posto.id][fuel].supplier 
+                                : null;
+                              
+                              // Verificar se é o melhor preço global
+                              isBestPrice = fuelComparison?.cheapest && 
+                                Math.abs(price - fuelComparison.cheapest.price) < 0.001;
+                            }
+
                             return (
-                              <TableCell key={fuel} className="text-right">
-                                <div className="flex items-center justify-end gap-1">
-                                  {editingMode ? (
-                                    <Input
-                                      type="number"
-                                      step="0.0001"
-                                      placeholder="0.0000"
-                                      value={price || ''}
-                                      onChange={e => {
-                                        const newPrice = parseFloat(e.target.value) || 0;
-                                        setPriceData(prev => ({
-                                          ...prev,
-                                          [posto.id]: {
-                                            ...prev[posto.id],
-                                            [fuel]: newPrice
-                                          }
-                                        }));
-                                      }}
-                                      className={`w-24 ${isIncorrect ? 'border-red-500' : ''}`}
-                                    />
-                                  ) : (
-                                    <span className={isIncorrect ? 'text-red-600 font-semibold' : ''}>
-                                      {price?.toFixed(4) || '-'}
-                                    </span>
+                              <TableCell key={posto.id} className="text-center py-3 px-2 align-top">
+                                <div className="flex flex-col items-center space-y-1 min-h-[60px]">
+                                  {/* Preço */}
+                                  <div className={`font-mono text-sm font-semibold ${
+                                    price 
+                                      ? (isBestPrice 
+                                          ? 'text-emerald-700 dark:text-emerald-400' 
+                                          : (isIncorrect 
+                                              ? 'text-red-700 dark:text-red-400' 
+                                              : 'text-slate-900 dark:text-slate-100'))
+                                      : 'text-slate-400'
+                                  }`}>
+                                    {price ? `R$ ${price.toFixed(4)}` : '—'}
+                                  </div>
+                                  
+                                  {/* Fornecedor específico do posto */}
+                                  {groupData?.bandeira === 'bandeira_branca' && postoSupplier && (
+                                    <div className="text-xs text-center">
+                                      <div className={`px-2 py-1 rounded text-xs font-medium ${
+                                        isBestPrice 
+                                          ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                                          : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                                      }`}>
+                                        {postoSupplier}
+                                      </div>
+                                      {isBestPrice && (
+                                        <div className="text-xs text-emerald-600 dark:text-emerald-400 font-medium mt-1">
+                                          Melhor oferta
+                                        </div>
+                                      )}
+                                    </div>
                                   )}
-                                  {!editingMode && (
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      className="h-6 w-6 p-0"
-                                      onClick={() => handleManualMarkIncorrect(posto.id, fuel)}
-                                    >
-                                      <AlertTriangle className={`w-3 h-3 ${isIncorrect ? 'text-red-500' : 'text-muted-foreground'}`} />
-                                    </Button>
+                                  
+                                  {/* Diferença de preço */}
+                                  {groupData?.bandeira === 'bandeira_branca' && price && fuelComparison?.cheapest && !isBestPrice && (
+                                    <div className="text-xs text-amber-700 dark:text-amber-400 font-medium">
+                                      +R$ {(price - fuelComparison.cheapest.price).toFixed(4)}
+                                    </div>
                                   )}
                                 </div>
-                              </TableCell>
-                            );
-                          })}
-                          {Object.keys(settings.fuelTypes || {}).map(fuel => {
-                            const price = postoPrices[fuel];
-                            const targetPrice = targetPrices[fuel];
-                            
-                            if (!price || !targetPrice) {
-                              return (
-                                <TableCell key={`diff-${fuel}`} className="text-right text-muted-foreground">
-                                  -
-                                </TableCell>
-                              );
-                            }
-                            
-                            const diff = price - targetPrice;
-                            const isAboveTarget = diff >= 0.01;
-                            const isMarked = manuallyMarkedIncorrect.has(`${posto.id}-${fuel}`);
-                            
-                            return (
-                              <TableCell key={`diff-${fuel}`} className="text-right">
-                                {isMarked ? (
-                                  <span className="text-red-600 font-medium">Marcado</span>
-                                ) : isAboveTarget ? (
-                                  <span className="text-red-600 font-medium">
-                                    +R$ {diff.toFixed(4)}
-                                  </span>
-                                ) : diff === 0 ? (
-                                  <span className="text-green-600">Igual</span>
-                                ) : (
-                                  <span className="text-muted-foreground">
-                                    R$ {diff.toFixed(4)}
-                                  </span>
-                                )}
                               </TableCell>
                             );
                           })}

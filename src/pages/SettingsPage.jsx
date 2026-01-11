@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Save, PlusCircle, Trash2, Edit, Briefcase, Truck, MapPin, Building, Droplets, Car, Users, Lock, CheckCircle, Settings } from 'lucide-react';
+import { Save, PlusCircle, Trash2, Edit, Briefcase, Truck, MapPin, Building, Droplets, Car, Users, Lock, CheckCircle, Settings, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -105,36 +105,27 @@ const SettingsPage = () => {
       if (routesRes.error) throw routesRes.error;
       if (groupsRes.error && groupsRes.error.code !== 'PGRST116') throw groupsRes.error;
 
-      setBaseCities((baseCitiesRes.data || []).sort((a, b) => {
-        const aNum = parseInt(a.id?.split('-').pop() || a.id || '0');
-        const bNum = parseInt(b.id?.split('-').pop() || b.id || '0');
-        return aNum - bNum;
-      }));
-      setCities((citiesRes.data || []).sort((a, b) => {
-        const aNum = parseInt(a.id?.split('-').pop() || a.id || '0');
-        const bNum = parseInt(b.id?.split('-').pop() || b.id || '0');
-        return aNum - bNum;
-      }));
-      setSuppliers((suppliersRes.data || []).sort((a, b) => {
-        const aNum = parseInt(a.id?.split('-').pop() || a.id || '0');
-        const bNum = parseInt(b.id?.split('-').pop() || b.id || '0');
-        return aNum - bNum;
-      }));
-      setPostos((postosRes.data || []).sort((a, b) => {
-        const aNum = parseInt(a.id?.split('-').pop() || a.id || '0');
-        const bNum = parseInt(b.id?.split('-').pop() || b.id || '0');
-        return aNum - bNum;
-      }));
+      // CORRIGIDO: Ordenar por nome em vez de tentar extrair números de UUID
+      setBaseCities((baseCitiesRes.data || []).sort((a, b) => 
+        (a.name || '').localeCompare(b.name || '', 'pt-BR', { sensitivity: 'base' })
+      ));
+      setCities((citiesRes.data || []).sort((a, b) => 
+        (a.name || '').localeCompare(b.name || '', 'pt-BR', { sensitivity: 'base' })
+      ));
+      setSuppliers((suppliersRes.data || []).sort((a, b) => 
+        (a.name || '').localeCompare(b.name || '', 'pt-BR', { sensitivity: 'base' })
+      ));
+      setPostos((postosRes.data || []).sort((a, b) => 
+        (a.name || '').localeCompare(b.name || '', 'pt-BR', { sensitivity: 'base' })
+      ));
       setFreightRoutes((routesRes.data || []).sort((a, b) => {
-        const aNum = parseInt(a.id?.split('-').pop() || a.id || '0');
-        const bNum = parseInt(b.id?.split('-').pop() || b.id || '0');
-        return aNum - bNum;
+        const aOrigin = a.origin?.name || '';
+        const bOrigin = b.origin?.name || '';
+        return aOrigin.localeCompare(bOrigin, 'pt-BR', { sensitivity: 'base' });
       }));
-      setGroups((groupsRes.data || []).sort((a, b) => {
-        const aNum = parseInt(a.id?.split('-').pop() || a.id || '0');
-        const bNum = parseInt(b.id?.split('-').pop() || b.id || '0');
-        return aNum - bNum;
-      }));
+      setGroups((groupsRes.data || []).sort((a, b) => 
+        (a.name || '').localeCompare(b.name || '', 'pt-BR', { sensitivity: 'base' })
+      ));
 
       const rawSettings = settingsRes.data?.settings || {};
       const mergedSettings = {
@@ -145,14 +136,9 @@ const SettingsPage = () => {
           ...(rawSettings.vehicleTypes || {}),
         },
         fuelTypes: {
-          // Usar rawSettings primeiro, depois complementar com defaultSettings apenas para itens que não existem
+          // CORRIGIDO: Primeiro defaultSettings, depois rawSettings para permitir sobrescrita
+          ...(defaultSettings.fuelTypes || {}),
           ...(rawSettings.fuelTypes || {}),
-          ...(Object.keys(defaultSettings.fuelTypes || {}).reduce((acc, key) => {
-              if (!rawSettings.fuelTypes || !rawSettings.fuelTypes[key]) {
-                  acc[key] = defaultSettings.fuelTypes[key];
-              }
-              return acc;
-          }, {})),
         },
       };
 
@@ -168,6 +154,107 @@ const SettingsPage = () => {
   }, [userId]);
 
   useEffect(() => { fetchData() }, [fetchData]);
+
+  // Subscriptions realtime para SettingsPage - configurações críticas
+  useEffect(() => {
+    if (!userId) return;
+
+    console.log('🔄 SettingsPage: Configurando subscriptions realtime...');
+    
+    // Subscription para groups (crítico - outros usuários criando/editando grupos)
+    const groupsSubscription = supabase
+      .channel('settings_groups')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'groups',
+        filter: `user_id=eq.${userId}`
+      }, (payload) => {
+        console.log('🔄 SettingsPage: groups update:', payload);
+        fetchData(); // Recarrega todos os dados para manter consistência
+      })
+      .subscribe();
+
+    // Subscription para postos (crítico - alterações afetam múltiplas áreas)
+    const postosSubscription = supabase
+      .channel('settings_postos')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'postos',
+        filter: `user_id=eq.${userId}`
+      }, (payload) => {
+        console.log('🔄 SettingsPage: postos update:', payload);
+        fetchData();
+      })
+      .subscribe();
+
+    // Subscription para suppliers (mudanças afetam disponibilidade de preços)
+    const suppliersSubscription = supabase
+      .channel('settings_suppliers')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'suppliers',
+        filter: `user_id=eq.${userId}`
+      }, (payload) => {
+        console.log('🔄 SettingsPage: suppliers update:', payload);
+        fetchData();
+      })
+      .subscribe();
+
+    // Subscription para base_cities (bases críticas para operação)
+    const baseCitiesSubscription = supabase
+      .channel('settings_base_cities')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'base_cities',
+        filter: `user_id=eq.${userId}`
+      }, (payload) => {
+        console.log('🔄 SettingsPage: base_cities update:', payload);
+        fetchData();
+      })
+      .subscribe();
+
+    // Subscription para cities (cidades dos postos)
+    const citiesSubscription = supabase
+      .channel('settings_cities')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'cities',
+        filter: `user_id=eq.${userId}`
+      }, (payload) => {
+        console.log('🔄 SettingsPage: cities update:', payload);
+        fetchData();
+      })
+      .subscribe();
+
+    // Subscription para freight_routes (rotas de frete)
+    const routesSubscription = supabase
+      .channel('settings_freight_routes')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'freight_routes',
+        filter: `user_id=eq.${userId}`
+      }, (payload) => {
+        console.log('🔄 SettingsPage: freight_routes update:', payload);
+        fetchData();
+      })
+      .subscribe();
+
+    return () => {
+      console.log('🔄 SettingsPage: Removendo subscriptions realtime...');
+      groupsSubscription.unsubscribe();
+      postosSubscription.unsubscribe();
+      suppliersSubscription.unsubscribe();
+      baseCitiesSubscription.unsubscribe();
+      citiesSubscription.unsubscribe();
+      routesSubscription.unsubscribe();
+    };
+  }, [userId, fetchData]);
 
   const handleSave = async (tableName, dataToSave) => {
     console.log('💾 Salvando dados:', { tableName, dataToSave });
@@ -242,11 +329,12 @@ const SettingsPage = () => {
             };
           case 'postos': {
             // Garante que fuel_types é um array e filtra valores inválidos
+            // CORRIGIDO: Validação de fuel types removendo filtro incorreto de item_
+            // Agora valida apenas se o combustível existe no settings.fuelTypes
             const validFuelTypes = Array.isArray(dataToSave.fuel_types) 
                 ? dataToSave.fuel_types.filter(fuel => 
                     fuel && 
                     typeof fuel === 'string' && 
-                    !fuel.startsWith('item_') &&
                     settings.fuelTypes?.[fuel] !== undefined
                   )
                 : [];
@@ -279,7 +367,11 @@ const SettingsPage = () => {
         .from(tableName)
         .upsert(record, {
           onConflict: tableName === 'groups' ? 'user_id,name' : 
-                     tableName === 'postos' ? 'user_id,name' : undefined
+                     tableName === 'postos' ? 'user_id,name' : 
+                     tableName === 'suppliers' ? 'id' : // CORRIGIDO: suppliers usa apenas 'id' 
+                     tableName === 'base_cities' ? 'user_id,name' :
+                     tableName === 'cities' ? 'user_id,name' :
+                     tableName === 'freight_routes' ? 'user_id,origin_city_id,destination_city_id' : undefined
         })
         .select()
         .single();
@@ -404,12 +496,36 @@ const SettingsPage = () => {
     }
   };
 
-  // Função para limpar itens item_* do settings.fuelTypes
-  const cleanInvalidFuelTypesFromSettings = async () => {
+  // Função para sincronizar fuelTypes com defaults do sistema
+  const syncFuelTypesWithDefaults = async () => {
     try {
-      const validFuelTypes = Object.entries(settings.fuelTypes || {})
-        .filter(([key]) => !key.startsWith('item_'))
-        .reduce((acc, [key, value]) => ({ ...acc, [key]: value }), {});
+      // Combustíveis padrão do sistema (baseado no mockData)
+      const defaultFuelTypes = {
+        gasolina_comum: { name: "Gasolina Comum" },
+        gasolina_aditivada: { name: "Gasolina Aditivada" },
+        etanol: { name: "Etanol" },
+        etanol_aditivado: { name: "Etanol Aditivado" },
+        diesel_s10: { name: "Diesel S10"},
+        diesel_s10_aditivado: { name: "Diesel S10 Aditivado" }, // ESTE ESTAVA FALTANDO!
+        diesel_s500: { name: "Diesel S500" },
+      };
+
+      // CORRIGIDO: Mapear item_1761651166334 para diesel_s10_aditivado
+      const currentTypes = settings.fuelTypes || {};
+      const correctedTypes = Object.entries(currentTypes).reduce((acc, [key, value]) => {
+        // Se encontrar item_1761651166334, mapear para diesel_s10_aditivado
+        if (key === 'item_1761651166334') {
+          acc['diesel_s10_aditivado'] = { name: "Diesel S10 Aditivado" };
+        } else if (!key.startsWith('item_')) {
+          // Manter outros combustíveis válidos
+          acc[key] = value;
+        }
+        // Filtrar fora todos os items_ inválidos
+        return acc;
+      }, {});
+
+      // Mesclar defaults com corrected types
+      const mergedFuelTypes = { ...defaultFuelTypes, ...correctedTypes };
 
       const { error } = await supabase
         .from('user_settings')
@@ -417,23 +533,23 @@ const SettingsPage = () => {
           user_id: user.id, 
           settings: { 
             ...settings, 
-            fuelTypes: validFuelTypes 
+            fuelTypes: mergedFuelTypes 
           } 
         });
 
       if (error) {
-        console.error('Erro ao limpar fuelTypes:', error);
-        toast({ title: 'Erro', description: 'Não foi possível limpar os tipos de combustível.', variant: 'destructive' });
+        console.error('Erro ao sincronizar fuelTypes:', error);
+        toast({ title: 'Erro', description: 'Não foi possível sincronizar os tipos de combustível.', variant: 'destructive' });
       } else {
-        setSettings(prev => ({ ...prev, fuelTypes: validFuelTypes }));
+        setSettings(prev => ({ ...prev, fuelTypes: mergedFuelTypes }));
         toast({ 
           title: 'Sucesso!', 
-          description: 'Itens inválidos removidos dos tipos de combustível.' 
+          description: 'Combustíveis sincronizados! item_1761651166334 foi convertido para Diesel S10 Aditivado.' 
         });
       }
     } catch (error) {
-      console.error('Erro ao limpar fuelTypes:', error);
-      toast({ title: 'Erro', description: 'Ocorreu um erro ao limpar os tipos de combustível.', variant: 'destructive' });
+      console.error('Erro ao sincronizar fuelTypes:', error);
+      toast({ title: 'Erro', description: 'Ocorreu um erro ao sincronizar os tipos de combustível.', variant: 'destructive' });
     }
   };
 
@@ -445,7 +561,12 @@ const SettingsPage = () => {
       variant: 'delete',
       onConfirm: async () => {
         try {
-          const { error } = await supabase.from(tableName).delete().eq('id', id);
+          // CORRIGIDO: Adicionar verificação de user_id para segurança
+          const { error } = await supabase
+            .from(tableName)
+            .delete()
+            .eq('id', id)
+            .eq('user_id', user.id);
           if (error) throw error;
           
           await fetchData();
@@ -753,13 +874,13 @@ const SettingsPage = () => {
                 { name: 'Postos', completed: postos.length > 0, desc: 'Cadastre postos' },
                 { name: 'Rotas', completed: freightRoutes.length > 0, desc: 'Defina fretes' }
               ].map((step, index) => (
-                <div key={index} className={`p-2 rounded-lg border text-center ${
+                <div key={index} className={`p-4 rounded-2xl border-2 text-center transition-all ${
                   step.completed 
-                    ? 'bg-green-50 border-green-200' 
-                    : 'bg-gray-50 border-gray-200'
+                    ? 'bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 border-green-300 dark:border-green-700 shadow-lg' 
+                    : 'bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-800 dark:to-slate-900 border-slate-300 dark:border-slate-700 shadow-md'
                 }`}>
-                  <div className={`w-6 h-6 rounded-full flex items-center justify-center mx-auto mb-1 ${
-                    step.completed ? 'bg-green-500 text-white' : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-400'
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center mx-auto mb-2 transition-all ${
+                    step.completed ? 'bg-gradient-to-r from-green-500 to-emerald-500 text-white shadow-lg' : 'bg-gradient-to-r from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-600 text-slate-600 dark:text-slate-400 shadow-md'
                   }`}>
                     {step.completed ? (
                       <CheckCircle className="w-3 h-3" />
@@ -814,10 +935,10 @@ const SettingsPage = () => {
                 </div>
                 <Button
                   onClick={() => setModal({ type: 'base_city', data: { name: '' } })}
-                  className="bg-blue-600 hover:bg-blue-700 h-8 px-3 text-xs flex-shrink-0"
+                  className="px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed font-bold rounded-xl h-12"
                 >
-                  <PlusCircle className="w-3 h-3 mr-1" />
-                  Adicionar
+                  <PlusCircle className="w-4 h-4 mr-2" />
+                  ➕ Adicionar
                 </Button>
               </div>
             </div>
@@ -881,10 +1002,10 @@ const SettingsPage = () => {
                 </div>
                 <Button
                   onClick={() => setModal({ type: 'city', data: { name: '' } })}
-                  className="bg-blue-600 hover:bg-blue-700 h-8 px-3 text-xs flex-shrink-0"
+                  className="px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed font-bold rounded-xl h-12"
                 >
-                  <PlusCircle className="w-3 h-3 mr-1" />
-                  Adicionar
+                  <PlusCircle className="w-4 h-4 mr-2" />
+                  🏙️ Adicionar
                 </Button>
               </div>
             </div>
@@ -948,10 +1069,10 @@ const SettingsPage = () => {
                 </div>
                 <Button
                   onClick={() => setModal({ type: 'group', data: { name: '' } })}
-                  className="bg-blue-600 hover:bg-blue-700 h-8 px-3 text-xs flex-shrink-0"
+                  className="px-6 py-3 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed font-bold rounded-xl h-12"
                 >
-                  <PlusCircle className="w-3 h-3 mr-1" />
-                  Adicionar
+                  <PlusCircle className="w-4 h-4 mr-2" />
+                  👥 Adicionar
                 </Button>
               </div>
             </div>
@@ -1015,11 +1136,11 @@ const SettingsPage = () => {
                 </div>
                 <Button
                   onClick={() => setModal({ type: 'supplier', data: { name: '', city_ids: [], available_products: [], has_credit: false, payment_term_days: null, payment_notes: '' } })}
-                  className="bg-blue-600 hover:bg-blue-700 h-8 px-3 text-xs flex-shrink-0"
+                  className="px-6 py-3 bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-700 hover:to-red-700 text-white shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed font-bold rounded-xl h-12"
                   disabled={noCities}
                 >
-                  <PlusCircle className="w-3 h-3 mr-1" />
-                  Adicionar
+                  <PlusCircle className="w-4 h-4 mr-2" />
+                  🚛 Adicionar
                 </Button>
               </div>
             </div>
@@ -1093,11 +1214,11 @@ const SettingsPage = () => {
                 </div>
                 <Button
                   onClick={() => setModal({ type: 'posto', data: { name: '', city_id: null, allowed_supply_cities: [], group_ids: [], fuel_types: [], is_base: false } })}
-                  className="bg-blue-600 hover:bg-blue-700 h-8 px-3 text-xs flex-shrink-0"
+                  className="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed font-bold rounded-xl h-12"
                   disabled={noCities}
                 >
-                  <PlusCircle className="w-3 h-3 mr-1" />
-                  Adicionar
+                  <PlusCircle className="w-4 h-4 mr-2" />
+                  ⛽ Adicionar
                 </Button>
               </div>
             </div>
@@ -1169,11 +1290,11 @@ const SettingsPage = () => {
                 </div>
                 <Button
                   onClick={() => setModal({ type: 'route', data: { origin_city_id: null, destination_city_id: null, cost_per_km: null, fixed_cost: null, has_mandatory_return: false, average_toll: null } })}
-                  className="bg-blue-600 hover:bg-blue-700 h-8 px-3 text-xs flex-shrink-0"
+                  className="px-6 py-3 bg-gradient-to-r from-yellow-600 to-amber-600 hover:from-yellow-700 hover:to-amber-700 text-white shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed font-bold rounded-xl h-12"
                   disabled={noCities}
                 >
-                  <PlusCircle className="w-3 h-3 mr-1" />
-                  Adicionar
+                  <PlusCircle className="w-4 h-4 mr-2" />
+                  🚚 Adicionar
                 </Button>
               </div>
             </div>
@@ -1253,6 +1374,7 @@ const SettingsPage = () => {
                   setSettings={setSettings} 
                   onSave={handleSaveSettings} 
                   fields={{ name: 'Nome' }}
+                  syncFuelTypesWithDefaults={syncFuelTypesWithDefaults}
                 />
               </div>
             </div>
@@ -1286,15 +1408,22 @@ const SettingsPage = () => {
 
 const ModalWrapper = ({ children, title, onClose, onSave, onSaveCurrent, data, wide }) => (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
-        <motion.div initial={{ y: 50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 50, opacity: 0 }} className={`bg-white rounded-lg shadow-xl w-full ${wide ? 'max-w-2xl' : 'max-w-md'} flex flex-col max-h-[90vh]`} onClick={e => e.stopPropagation()}>
-            <header className="p-4 border-b border-slate-200 dark:border-slate-700 bg-gray-50 rounded-t-lg">
-                <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">{title}</h3>
+        <motion.div initial={{ y: 50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 50, opacity: 0 }} className={`bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm rounded-3xl shadow-2xl w-full ${wide ? 'max-w-3xl' : 'max-w-xl'} flex flex-col max-h-[90vh] border-2 border-slate-200 dark:border-slate-700`} onClick={e => e.stopPropagation()}>
+            <header className="p-6 border-b-2 border-slate-200 dark:border-slate-700 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-t-3xl">
+                <h3 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent flex items-center gap-3">
+                    <div className="p-2 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-xl">
+                        <Settings className="w-6 h-6 text-white" />
+                    </div>
+                    {title}
+                </h3>
             </header>
-            <main className="p-4 space-y-4 overflow-y-auto flex-1">{children}</main>
-            <footer className="p-4 border-t border-gray-200 flex justify-end gap-2 bg-gray-50 rounded-b-lg">
-                <Button variant="ghost" onClick={onClose} className="text-slate-600 dark:text-slate-400 hover:text-gray-800">Cancelar</Button>
-                <Button onClick={() => onSaveCurrent ? onSaveCurrent() : onSave(data)} className="bg-blue-600 hover:bg-blue-700">
-                    <Save className="w-4 h-4 mr-2" /> Salvar
+            <main className="p-6 space-y-6 overflow-y-auto flex-1 bg-gradient-to-br from-slate-50/50 to-blue-50/50 dark:from-slate-800/50 dark:to-slate-900/50">{children}</main>
+            <footer className="p-6 border-t-2 border-slate-200 dark:border-slate-700 flex justify-end gap-4 bg-gradient-to-r from-slate-50 to-blue-50 dark:from-slate-800 dark:to-slate-900 rounded-b-3xl">
+                <Button variant="outline" onClick={onClose} className="border-2 border-slate-300 text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-950/20 font-semibold shadow-md hover:shadow-lg transition-all rounded-xl px-6 py-3">
+                    ❌ Cancelar
+                </Button>
+                <Button onClick={() => onSaveCurrent ? onSaveCurrent() : onSave(data)} className="px-8 py-3 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 font-bold rounded-xl">
+                    <Save className="w-5 h-5 mr-2" /> ✅ Salvar
                 </Button>
             </footer>
         </motion.div>
@@ -1415,32 +1544,15 @@ const GroupModal = ({ data, baseCities = [], postos = [], suppliers = [], onClos
 };
 
 const MultiSelectCheckbox = ({ title, options, selected, onToggle, description, className }) => {
-    // Normalizar IDs e remover duplicatas de combustíveis
+    // CORRIGIDO: Remover duplicatas baseado no ID real do item
     const normalizedOptions = options.reduce((acc, option) => {
-        // Para combustíveis, remover prefixo item_ e usar ID padrão
-        let normalizedId = option.id;
-        let normalizedName = option.name;
+        if (!option || !option.id) return acc;
         
-        // Mapeamento de IDs item_ para IDs padrão
-        const itemFuelMap = {
-            'item_1761651166334': 'diesel_s10_aditivado',
-            'item_1761651181190': 'gasolina_aditivada', 
-            'item_1761651189822': 'etanol_aditivado',
-            'item_1761651200215': 'diesel_s500'
-        };
-        
-        if (itemFuelMap[option.id]) {
-            normalizedId = itemFuelMap[option.id];
-        }
-        
-        // Verificar se já existe este combustível normalizado
-        const existingIndex = acc.findIndex(item => 
-            item.id === normalizedId || 
-            (itemFuelMap[option.id] && item.id === itemFuelMap[option.id])
-        );
+        // Verificar se já existe este item baseado no ID
+        const existingIndex = acc.findIndex(item => item.id === option.id);
         
         if (existingIndex === -1) {
-            acc.push({ ...option, id: normalizedId });
+            acc.push(option);
         }
         
         return acc;
@@ -1454,7 +1566,7 @@ const MultiSelectCheckbox = ({ title, options, selected, onToggle, description, 
                 {normalizedOptions.map(option => (
                     <div key={option.id} className="flex items-center space-x-2">
                         <Checkbox id={`opt-${option.id}`} checked={(selected || []).includes(option.id)} onCheckedChange={v => onToggle(option.id, v)} />
-                        <label htmlFor={`opt-${option.id}`} className="text-sm">{option.name}</label>
+                        <label htmlFor={`opt-${option.id}`} className="text-sm text-foreground cursor-pointer">{option.name}</label>
                     </div>
                 ))}
             </div>
@@ -1796,14 +1908,15 @@ const RouteModal = ({ data, baseCities = [], cities, settings, onClose, onSave }
     </ModalWrapper>; 
 };
 
-const GeneralSettingsEditor = ({ title, icon, settingsKey, settings, setSettings, onSave, fields }) => {
+const GeneralSettingsEditor = ({ title, icon, settingsKey, settings, setSettings, onSave, fields, syncFuelTypesWithDefaults }) => {
     const items = settings[settingsKey] || {};
     const handleItemChange = (key, field, value) => {
         const updatedItems = { ...items, [key]: { ...items[key], [field]: value }};
         setSettings({...settings, [settingsKey]: updatedItems });
     };
     const handleAddItem = () => {
-        const newKey = `item_${Date.now()}`;
+        // CORRIGIDO: Usar chave sem prefixo item_ para evitar conflitos
+        const newKey = `custom_${Date.now()}`;
         const newItem = Object.keys(fields).reduce((acc, field) => ({...acc, [field]: ''}), {});
         if (Object.keys(fields).includes('volume')) {
             newItem.volume = 0;

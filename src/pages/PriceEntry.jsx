@@ -914,7 +914,7 @@ const PriceEntry = () => {
         }
       });
 
-      // CORRIGIDO: Verificar se já existe registro para fazer merge dos group_ids - SEM .single() para evitar erro
+      // CORRIGIDO: Verificar se já existe registro - SEM fazer merge automático de grupos
       const { data: existingRecords, error: existingError } = await supabase
         .from('daily_prices')
         .select('group_ids, prices, maintained_prices')
@@ -925,28 +925,28 @@ const PriceEntry = () => {
 
       const existingRecord = existingRecords && existingRecords.length > 0 ? existingRecords[0] : null;
 
-      // DEBUG: Log para verificar merge de grupos
+      // DEBUG: Log para verificar operação
       if (existingRecord) {
-        console.log('📦 MERGE - Registro existente encontrado:', {
+        console.log('📦 SOBRESCRITA - Registro existente encontrado:', {
           existing_groups: existingRecord.group_ids,
           new_groups: selectedGroups,
           supplier: selectedSupplier,
           base: selectedBase,
-          date
+          date,
+          operation: 'SOBRESCREVER (não merge)'
         });
       }
 
-      // Fazer merge dos group_ids se já existir registro
-      const finalGroupIds = existingRecord 
-        ? [...new Set([...(existingRecord.group_ids || []), ...selectedGroups])]
-        : selectedGroups;
+      // CORRIGIDO: Usar APENAS os grupos selecionados (não fazer merge automático)
+      const finalGroupIds = selectedGroups;
 
-      console.log('📦 MERGE - Grupos finais:', {
+      console.log('📦 GRUPOS FINAIS - Aplicar apenas aos selecionados:', {
         finalGroupIds,
-        wasExisting: !!existingRecord
+        wasExisting: !!existingRecord,
+        operation: 'SOBRESCRITA_COMPLETA'
       });
 
-      // Fazer merge dos preços mantendo os existentes e adicionando/atualizando os novos
+      // Fazer merge apenas dos preços mantendo os existentes e adicionando/atualizando os novos
       const finalPrices = existingRecord
         ? { ...existingRecord.prices, ...prices }
         : prices;
@@ -975,9 +975,14 @@ const PriceEntry = () => {
 
       if (error) throw error;
 
+      const actionType = existingRecord ? 'atualizados' : 'salvos';
+      const groupNames = groups.filter(g => selectedGroups.includes(g.id)).map(g => g.name).join(', ');
+      
       toast({
-        title: '✅ Preços salvos com sucesso!',
-        description: `Aplicado a ${affectedPostos.length} posto(s) de ${selectedGroups.length} grupo(s)`,
+        title: `✅ Preços ${actionType} com sucesso!`,
+        description: existingRecord 
+          ? `Preços atualizados para os grupos selecionados: ${groupNames} (${affectedPostos.length} posto(s))`
+          : `Aplicado a ${affectedPostos.length} posto(s) de ${selectedGroups.length} grupo(s): ${groupNames}`,
       });
 
       // Limpar formulário após salvar

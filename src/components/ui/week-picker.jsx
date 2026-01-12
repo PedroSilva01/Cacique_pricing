@@ -13,7 +13,8 @@ export function WeekPicker({ value, onChange, className, disabled }) {
   const [date, setDate] = React.useState(() => {
     if (value) {
       const [year, month, day] = value.split('-').map(Number)
-      return new Date(Date.UTC(year, month - 1, day))
+      // Usar horário local ao invés de UTC para evitar problemas de fuso
+      return new Date(year, month - 1, day)
     }
     return undefined
   })
@@ -21,16 +22,16 @@ export function WeekPicker({ value, onChange, className, disabled }) {
 
   React.useEffect(() => {
     if (value) {
-      // Usar UTC para evitar problemas de fuso horário
+      // Usar horário local para evitar mudança de dia
       const [year, month, day] = value.split('-').map(Number)
-      setDate(new Date(Date.UTC(year, month - 1, day)))
+      setDate(new Date(year, month - 1, day))
     }
   }, [value])
 
   const handleSelect = (newDate) => {
     if (newDate) {
       setDate(newDate)
-      // Usar UTC para evitar problemas de fuso horário
+      // Usar horário local para evitar mudança de dia
       const year = newDate.getFullYear()
       const month = String(newDate.getMonth() + 1).padStart(2, '0')
       const day = String(newDate.getDate()).padStart(2, '0')
@@ -52,7 +53,7 @@ export function WeekPicker({ value, onChange, className, disabled }) {
           )}
         >
           <CalendarIcon className="mr-2 h-4 w-4" />
-          {date ? format(date, "dd/MM/yyyy") : <span>Selecione uma segunda-feira</span>}
+          {date ? format(date, "dd/MM/yyyy", { locale: ptBR }) : <span>Selecione uma segunda-feira</span>}
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-auto p-0 rounded-lg shadow-xl border z-50" align="start" side="bottom" sideOffset={4}>
@@ -84,11 +85,12 @@ export function WeekPicker({ value, onChange, className, disabled }) {
             locale={ptBR}
             showOutsideDays={false}
             disabled={(date) => {
-              // Bloquear todos os dias exceto segundas-feiras
-              return date.getDay() !== 1;
+              // Bloquear todos os dias exceto segundas-feiras (1 = segunda)
+              const dayOfWeek = date.getDay();
+              return dayOfWeek !== 1;
             }}
             modifiers={{
-              monday: { dayOfWeek: 1 }
+              monday: (date) => date.getDay() === 1
             }}
             modifiersStyles={{
               monday: {

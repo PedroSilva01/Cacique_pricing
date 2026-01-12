@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { DatePicker } from '@/components/ui/date-picker';
 import { WeekPicker } from '@/components/ui/week-picker';
-import { Download, TrendingUp, TrendingDown, DollarSign, Truck, Filter, BarChart3, AlertTriangle } from 'lucide-react';
+import { Download, TrendingUp, TrendingDown, DollarSign, Truck, Filter, BarChart3, AlertTriangle, FileText } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { motion } from 'framer-motion';
 
@@ -20,11 +20,20 @@ export default function FinancialDashboard() {
   // Função para formatar moeda
   const formatCurrency = (value) => {
     const num = parseFloat(value);
-    if (isNaN(num)) return '';
+    if (isNaN(num)) return '0,00';
     return num.toLocaleString('pt-BR', {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2
     });
+  };
+
+  // Função para calcular data de pagamento
+  const calculatePaymentDate = (invoiceDate, paymentDays) => {
+    if (!invoiceDate) return null;
+    const invoice = new Date(invoiceDate + 'T00:00:00');
+    const days = parseInt(paymentDays) || 0;
+    invoice.setDate(invoice.getDate() + days);
+    return invoice;
   };
 
   const [loading, setLoading] = useState(false);
@@ -38,21 +47,45 @@ export default function FinancialDashboard() {
   // Estados para controle de limites diários
   const [weeklyLimits, setWeeklyLimits] = useState({});
   const [selectedWeek, setSelectedWeek] = useState(() => {
+    // Usar horário local brasileiro (UTC-3)
     const now = new Date();
-    const currentDay = now.getDay();
-    const diff = currentDay === 0 ? -6 : 1 - currentDay; // Se domingo, volta 6 dias; se outro, vai para segunda
-    const monday = new Date(now.setDate(diff));
-    return monday.toISOString().split('T')[0];
+    const currentDay = now.getDay(); // 0=domingo, 1=segunda, 2=terça...
+    
+    // Calcular quantos dias voltar para chegar à segunda-feira
+    let daysToSubtract;
+    if (currentDay === 0) { // Domingo
+      daysToSubtract = 6; // Voltar 6 dias para pegar segunda anterior
+    } else { // Segunda a sábado
+      daysToSubtract = currentDay - 1; // Voltar para segunda desta semana
+    }
+    
+    const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysToSubtract);
+    
+    // Debug removido - cálculo da semana funcionando corretamente
+    
+    const year = monday.getFullYear();
+    const month = String(monday.getMonth() + 1).padStart(2, '0');
+    const day = String(monday.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   });
   const [showLimitsModal, setShowLimitsModal] = useState(false);
   const [editingLimits, setEditingLimits] = useState({});
 
   const [startDate, setStartDate] = useState(() => {
-    const date = new Date();
-    date.setDate(1);
-    return date.toISOString().split('T')[0];
+    // Primeiro dia do mês atual em horário local brasileiro
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    return `${year}-${month}-01`;
   });
-  const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [endDate, setEndDate] = useState(() => {
+    // Data atual em horário local brasileiro
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  });
   const [selectedBrand, setSelectedBrand] = useState('all');
 
   const financialRatesByBrand = {
@@ -76,35 +109,58 @@ export default function FinancialDashboard() {
       try {
         const alerts = [];
         
-        // Para cada dia no período
-        const start = new Date(startDate);
-        const end = new Date(endDate);
+        // Para cada dia no período - usar horário local brasileiro
+        const start = new Date(startDate + 'T00:00:00');
+        const end = new Date(endDate + 'T23:59:59');
         const currentDate = new Date(start);
         
-        while (currentDate <= end) {
-          const dateStr = currentDate.toISOString().split('T')[0];
+        // Buscar todos os pedidos do usuário para filtrar por data de pagamento
+        const { data: allOrdersData, error: allOrdersError } = await supabase
+          .from('purchase_orders')
+          .select(`
+            id,
+            station_id,
+            fuel_type,
+            unit_price,
+            volume,
+            total_cost,
+            order_date,
+            invoice_date,
+            payment_term_days,
+            postos(id, name, group_ids),
+            groups(id, name, reference_posto_id)
+          `)
+          .eq('user_id', userId);
+
+        if (allOrdersError) throw allOrdersError;
+
+        // Filtrar pedidos cujos pagamentos caem no período selecionado
+        const relevantOrders = (allOrdersData || []).filter(order => {
+          if (!order.invoice_date || order.payment_term_days === null) return false;
           
-          // Buscar pedidos do dia
-          const { data: ordersData, error: ordersError } = await supabase
-            .from('purchase_orders')
-            .select(`
-              id,
-              station_id,
-              fuel_type,
-              unit_price,
-              volume,
-              total_cost,
-              order_date,
-              postos(id, name, group_ids),
-              groups(id, name, reference_posto_id)
-            `)
-            .eq('user_id', userId)
-            .eq('order_date', dateStr);
+          const paymentDate = calculatePaymentDate(order.invoice_date, order.payment_term_days);
+          if (!paymentDate) return false;
           
-          if (ordersError) throw ordersError;
+          const paymentDateStr = paymentDate.toISOString().split('T')[0];
+          // Comparar com data completa incluindo horário
+          return paymentDate >= start && paymentDate <= end;
+        });
+
+        // Processar pedidos agrupados por data de pagamento
+        const ordersByPaymentDate = {};
+        relevantOrders.forEach(order => {
+          const paymentDate = calculatePaymentDate(order.invoice_date, order.payment_term_days);
+          const paymentDateStr = paymentDate.toISOString().split('T')[0];
           
+          if (!ordersByPaymentDate[paymentDateStr]) {
+            ordersByPaymentDate[paymentDateStr] = [];
+          }
+          ordersByPaymentDate[paymentDateStr].push(order);
+        });
+
+        // Processar cada data de pagamento
+        for (const [paymentDateStr, ordersData] of Object.entries(ordersByPaymentDate)) {
           if (!ordersData || ordersData.length === 0) {
-            currentDate.setDate(currentDate.getDate() + 1);
             continue;
           }
           
@@ -260,25 +316,45 @@ export default function FinancialDashboard() {
     }
   };
   
-  // Filtrar pedidos para uso em múltiplos lugares
+  // Filtrar pedidos para uso em múltiplos lugares (usando data de pagamento)
   const filteredOrders = useMemo(() => {
     return orders.filter(order => {
-      const orderDate = new Date(order.order_date);
-      const start = new Date(startDate);
-      const end = new Date(endDate);
-
-      if (orderDate < start || orderDate > end) return false;
+      // Calcular data de pagamento para o filtro
+      const isCashPurchase = order.is_cash_purchase || (order.payment_term_days === 0);
+      let paymentDate;
+      
+      if (isCashPurchase) {
+        // Pagamento à vista: usar data do faturamento
+        paymentDate = new Date(order.invoice_date + 'T00:00:00');
+      } else {
+        // Pagamento a prazo: calcular data de vencimento
+        if (!order.invoice_date || order.payment_term_days === null) return false;
+        paymentDate = calculatePaymentDate(order.invoice_date, order.payment_term_days);
+        if (!paymentDate) return false;
+        
+        // Ajustar para próxima segunda se cair em fim de semana
+        const dayOfWeek = paymentDate.getDay();
+        if (dayOfWeek === 0 || dayOfWeek === 6) {
+          const daysToAdd = dayOfWeek === 0 ? 1 : 2;
+          paymentDate.setDate(paymentDate.getDate() + daysToAdd);
+        }
+      }
+      
+      const start = new Date(startDate + 'T00:00:00');
+      const end = new Date(endDate + 'T23:59:59');
+      
+      if (paymentDate < start || paymentDate > end) return false;
 
       if (selectedBrand !== 'all') {
         const posto = postos.find(p => p.id === order.station_id);
         if (!posto || posto.bandeira !== selectedBrand) return false;
       }
-
+      
       return true;
     });
   }, [orders, startDate, endDate, selectedBrand, postos]);
   
-  // Calcular total a pagar por dia da semana
+  // Calcular total a pagar por dia da semana (apenas para a semana selecionada)
   const dailyPayments = useMemo(() => {
     const payments = {
       0: 0, // domingo
@@ -290,23 +366,64 @@ export default function FinancialDashboard() {
       6: 0  // sábado
     };
     
-    filteredOrders.forEach(order => {
-      const orderDate = new Date(order.order_date);
-      const dayOfWeek = orderDate.getDay();
-      const totalCost = order.total_cost || 0;
+    if (!selectedWeek) return payments;
+    
+    // Calcular início e fim da semana selecionada - usar horário local
+    const weekStart = new Date(selectedWeek + 'T00:00:00');
+    const weekEnd = new Date(selectedWeek + 'T00:00:00');
+    weekEnd.setDate(weekStart.getDate() + 6);
+    
+    
+    // Filtrar apenas pedidos cujos pagamentos caem na semana selecionada
+    orders.forEach(order => {
+      if (!order.invoice_date) return;
       
-      // Se o pagamento cai no sábado (6) ou domingo (0), mas o banco só funciona na segunda,
-      // movemos o pagamento para a segunda-feira (1)
-      let effectiveDayOfWeek = dayOfWeek;
-      if (effectiveDayOfWeek === 0 || effectiveDayOfWeek === 6) {
-        effectiveDayOfWeek = 1; // Segunda-feira
+      const totalCost = (order.total_cost || 0) / 1000; // total_cost está multiplicado por 1000 no banco
+      const isCashPurchase = order.is_cash_purchase || (order.payment_term_days === 0);
+      
+      let finalPaymentDate;
+      let effectiveDayOfWeek;
+      
+      if (isCashPurchase) {
+        // Pagamento à vista: usar data do faturamento diretamente
+        finalPaymentDate = new Date(order.invoice_date + 'T00:00:00');
+        effectiveDayOfWeek = finalPaymentDate.getDay();
+      } else {
+        // Pagamento a prazo: calcular data de vencimento
+        if (order.payment_term_days === null) return;
+        
+        const paymentDate = calculatePaymentDate(order.invoice_date, order.payment_term_days);
+        if (!paymentDate) return;
+        
+        const dayOfWeek = paymentDate.getDay();
+        finalPaymentDate = new Date(paymentDate);
+        effectiveDayOfWeek = dayOfWeek;
+        
+        // Se o pagamento cai no sábado (6) ou domingo (0), mover para a próxima segunda-feira
+        if (effectiveDayOfWeek === 0 || effectiveDayOfWeek === 6) {
+          const daysToAdd = effectiveDayOfWeek === 0 ? 1 : 2; // domingo +1, sábado +2
+          finalPaymentDate.setDate(finalPaymentDate.getDate() + daysToAdd);
+          effectiveDayOfWeek = 1; // Segunda-feira
+        }
+      }
+      
+      // Verificar se o pagamento final cai na semana selecionada
+      // Normalizar datas para comparar apenas dia/mês/ano (sem horário)
+      const paymentDateOnly = new Date(finalPaymentDate.getFullYear(), finalPaymentDate.getMonth(), finalPaymentDate.getDate());
+      const weekStartOnly = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate());
+      const weekEndOnly = new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate());
+      
+      if (paymentDateOnly < weekStartOnly || paymentDateOnly > weekEndOnly) {
+        return; // Pula este pagamento pois não está na semana selecionada
       }
       
       payments[effectiveDayOfWeek] += totalCost;
     });
     
+    // Debug removido - pagamentos calculados com sucesso
+    
     return payments;
-  }, [filteredOrders]);
+  }, [orders, selectedWeek]);
   const summary = useMemo(() => {
     let totalVolume = 0;
     let totalValue = 0;
@@ -367,6 +484,7 @@ export default function FinancialDashboard() {
     };
   }, [filteredOrders, postos]);
   
+  
   // Dias da semana para exibição (apenas dias úteis para limites)
   const weekDays = [
     { key: 1, name: 'Segunda-feira', short: 'Seg', hasLimit: true },
@@ -408,6 +526,103 @@ export default function FinancialDashboard() {
     toast({ title: '✅ Relatório exportado!', description: 'Arquivo CSV baixado com sucesso.' });
   };
 
+  const exportToPDF = () => {
+    // Criar conteúdo HTML para impressão
+    const htmlContent = `
+      <html>
+        <head>
+          <title>Relatório Financeiro</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            h1 { color: #333; text-align: center; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+            th { background-color: #f5f5f5; font-weight: bold; }
+            .text-right { text-align: right; }
+            .summary { margin-top: 20px; padding: 10px; background-color: #f9f9f9; border-radius: 5px; }
+          </style>
+        </head>
+        <body>
+          <h1>Dashboard Financeiro - Relatório</h1>
+          <p><strong>Período:</strong> ${new Date(startDate + 'T00:00:00').toLocaleDateString('pt-BR')} a ${new Date(endDate + 'T00:00:00').toLocaleDateString('pt-BR')}</p>
+          
+          <table>
+            <thead>
+              <tr>
+                <th>Data Faturamento</th>
+                <th>Data Pagamento</th>
+                <th>Posto</th>
+                <th>Combustível</th>
+                <th>Volume (L)</th>
+                <th>Preço/L</th>
+                <th>Valor Total</th>
+                <th>Prazo</th>
+                <th>Custo Fin.</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${filteredOrders.map(order => {
+                const posto = postos.find(p => p.id === order.station_id);
+                const rate = posto ? (financialRatesByBrand[posto.bandeira] || 0.00535) : 0.00535;
+                const financialCost = rate * (order.payment_term_days || 0) * (order.volume || 0);
+                const totalValue = (order.total_cost || 0) / 1000 || ((order.unit_price || 0) * (order.volume || 0));
+                
+                // Calcular data de pagamento para o PDF
+                const isCashPurchase = order.is_cash_purchase || (order.payment_term_days === 0);
+                let paymentDate;
+                
+                if (isCashPurchase) {
+                  paymentDate = new Date(order.invoice_date + 'T00:00:00');
+                } else {
+                  if (order.invoice_date && order.payment_term_days !== null) {
+                    paymentDate = calculatePaymentDate(order.invoice_date, order.payment_term_days);
+                    if (paymentDate) {
+                      const dayOfWeek = paymentDate.getDay();
+                      if (dayOfWeek === 0 || dayOfWeek === 6) {
+                        const daysToAdd = dayOfWeek === 0 ? 1 : 2;
+                        paymentDate.setDate(paymentDate.getDate() + daysToAdd);
+                      }
+                    }
+                  }
+                }
+                
+                return `
+                  <tr>
+                    <td>${new Date(order.invoice_date + 'T00:00:00').toLocaleDateString('pt-BR')}</td>
+                    <td>${paymentDate ? paymentDate.toLocaleDateString('pt-BR') : 'N/D'}</td>
+                    <td>${posto?.name || 'N/D'}</td>
+                    <td>${settings.fuelTypes?.[order.fuel_type]?.name || order.fuel_type}</td>
+                    <td class="text-right">${(order.volume || 0).toLocaleString('pt-BR')}</td>
+                    <td class="text-right">R$ ${(order.unit_price || 0).toFixed(4)}</td>
+                    <td class="text-right">R$ ${totalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td class="text-right">${order.payment_term_days || 0}d</td>
+                    <td class="text-right">R$ ${financialCost.toFixed(2)}</td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+          
+          <div class="summary">
+            <h3>Resumo do Período</h3>
+            <p><strong>Total de pedidos:</strong> ${filteredOrders.length}</p>
+            <p><strong>Volume total:</strong> ${filteredOrders.reduce((sum, order) => sum + (order.volume || 0), 0).toLocaleString('pt-BR')} L</p>
+            <p><strong>Valor total:</strong> R$ ${filteredOrders.reduce((sum, order) => sum + ((order.total_cost || 0) / 1000), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+          </div>
+        </body>
+      </html>
+    `;
+    
+    // Abrir nova janela e imprimir
+    const printWindow = window.open('', '_blank');
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+    
+    toast({ title: '✅ PDF gerado!', description: 'Relatório aberto para impressão/salvar como PDF.' });
+  };
+
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 dark:from-slate-950 dark:via-slate-900 dark:to-slate-900 p-6">
       {/* Header */}
@@ -424,10 +639,16 @@ export default function FinancialDashboard() {
             <p className="text-lg text-slate-600 dark:text-slate-400 mt-1">Análise completa de custos e despesas</p>
           </div>
         </div>
-        <Button onClick={exportToCSV} className="gap-2">
-          <Download className="w-4 h-4" />
-          Exportar CSV
-        </Button>
+        <div className="flex gap-2">
+          <Button onClick={exportToCSV} className="gap-2">
+            <Download className="w-4 h-4" />
+            Exportar CSV
+          </Button>
+          <Button onClick={exportToPDF} variant="outline" className="gap-2">
+            <FileText className="w-4 h-4" />
+            Exportar PDF
+          </Button>
+        </div>
       </div>
 
       <div className="max-w-7xl mx-auto space-y-6">
@@ -549,7 +770,7 @@ export default function FinancialDashboard() {
                         {alert.postoName} - {alert.fuelTypeName}
                       </p>
                       <p className="text-xs text-red-600 dark:text-red-400">
-                        {alert.groupName} • {new Date(alert.orderDate).toLocaleDateString('pt-BR')}
+                        {alert.groupName} • {new Date(alert.orderDate + 'T00:00:00').toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
                       </p>
                     </div>
                     <div className="text-right">
@@ -660,8 +881,9 @@ export default function FinancialDashboard() {
                 value={selectedWeek}
                 onChange={(date) => {
                   if (date) {
-                    // Verificar se é segunda-feira, se não for, encontrar a próxima segunda-feira
-                    const selectedDate = new Date(date);
+                    // Usar horário local brasileiro para evitar problemas de timezone
+                    const [year, month, day] = date.split('-').map(Number);
+                    const selectedDate = new Date(year, month - 1, day);
                     const dayOfWeek = selectedDate.getDay();
                     
                     if (dayOfWeek !== 1) {
@@ -673,7 +895,8 @@ export default function FinancialDashboard() {
                       const sunday = new Date(monday);
                       sunday.setDate(monday.getDate() + 6);
                       
-                      setSelectedWeek(monday.toISOString().split('T')[0]);
+                      const mondayStr = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, '0')}-${String(monday.getDate()).padStart(2, '0')}`;
+                      setSelectedWeek(mondayStr);
                       
                       toast({ 
                         title: '📅 Semana selecionada', 
@@ -681,15 +904,14 @@ export default function FinancialDashboard() {
                       });
                     } else {
                       // Se já for segunda-feira, usar diretamente
-                      const monday = new Date(date);
-                      const sunday = new Date(monday);
-                      sunday.setDate(monday.getDate() + 6);
+                      setSelectedWeek(date);
                       
-                      setSelectedWeek(monday.toISOString().split('T')[0]);
+                      const sunday = new Date(selectedDate);
+                      sunday.setDate(selectedDate.getDate() + 6);
                       
                       toast({ 
                         title: '📅 Semana selecionada', 
-                        description: `${monday.toLocaleDateString('pt-BR')} a ${sunday.toLocaleDateString('pt-BR')}` 
+                        description: `${selectedDate.toLocaleDateString('pt-BR')} a ${sunday.toLocaleDateString('pt-BR')}` 
                       });
                     }
                   } else {
@@ -712,10 +934,10 @@ export default function FinancialDashboard() {
             {selectedWeek && (
               <div className="mt-2">
                 <span className="text-xs text-green-600 dark:text-green-400">
-                  📅 Mostrando dados da semana: {new Date(selectedWeek).toLocaleDateString('pt-BR')} a {
+                  📅 Mostrando dados da semana: {new Date(selectedWeek + 'T00:00:00').toLocaleDateString('pt-BR')} a {
                     (() => {
-                      const sunday = new Date(selectedWeek);
-                      sunday.setDate(new Date(selectedWeek).getDate() + 6);
+                      const sunday = new Date(selectedWeek + 'T00:00:00');
+                      sunday.setDate(sunday.getDate() + 6);
                       return sunday.toLocaleDateString('pt-BR');
                     })()
                   }
@@ -990,7 +1212,8 @@ export default function FinancialDashboard() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b">
-                  <th className="text-left p-2">Data</th>
+                  <th className="text-left p-2">Data Faturamento</th>
+                  <th className="text-left p-2">Data Pagamento</th>
                   <th className="text-left p-2">Posto</th>
                   <th className="text-left p-2">Combustível</th>
                   <th className="text-right p-2">Volume (L)</th>
@@ -1005,16 +1228,36 @@ export default function FinancialDashboard() {
                   const posto = postos.find(p => p.id === order.station_id);
                   const rate = posto ? (financialRatesByBrand[posto.bandeira] || 0.00535) : 0.00535;
                   const financialCost = rate * (order.payment_term_days || 0) * (order.volume || 0);
-                  const totalValue = (order.unit_price || 0) * (order.volume || 0);
+                  const totalValue = (order.total_cost || 0) / 1000 || ((order.unit_price || 0) * (order.volume || 0));
+                  
+                  // Calcular data de pagamento para exibir
+                  const isCashPurchase = order.is_cash_purchase || (order.payment_term_days === 0);
+                  let paymentDate;
+                  
+                  if (isCashPurchase) {
+                    paymentDate = new Date(order.invoice_date + 'T00:00:00');
+                  } else {
+                    if (order.invoice_date && order.payment_term_days !== null) {
+                      paymentDate = calculatePaymentDate(order.invoice_date, order.payment_term_days);
+                      if (paymentDate) {
+                        const dayOfWeek = paymentDate.getDay();
+                        if (dayOfWeek === 0 || dayOfWeek === 6) {
+                          const daysToAdd = dayOfWeek === 0 ? 1 : 2;
+                          paymentDate.setDate(paymentDate.getDate() + daysToAdd);
+                        }
+                      }
+                    }
+                  }
 
                   return (
                     <tr key={order.id} className="border-b hover:bg-muted/50">
-                      <td className="p-2">{new Date(order.order_date).toLocaleDateString('pt-BR')}</td>
+                      <td className="p-2">{new Date(order.invoice_date + 'T00:00:00').toLocaleDateString('pt-BR')}</td>
+                      <td className="p-2">{paymentDate ? paymentDate.toLocaleDateString('pt-BR') : 'N/D'}</td>
                       <td className="p-2">{posto?.name || 'N/D'}</td>
                       <td className="p-2">{settings.fuelTypes?.[order.fuel_type]?.name || order.fuel_type}</td>
                       <td className="p-2 text-right font-mono">{(order.volume || 0).toLocaleString('pt-BR')}</td>
                       <td className="p-2 text-right font-mono">R$ {(order.unit_price || 0).toFixed(4)}</td>
-                      <td className="p-2 text-right font-mono font-bold">R$ {totalValue.toFixed(2)}</td>
+                      <td className="p-2 text-right font-mono font-bold">R$ {totalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                       <td className="p-2 text-right">{order.payment_term_days || 0}d</td>
                       <td className="p-2 text-right font-mono text-orange-600">R$ {financialCost.toFixed(2)}</td>
                     </tr>

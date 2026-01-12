@@ -19,6 +19,7 @@ import { DatePicker } from '@/components/ui/date-picker';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import { defaultSettings } from '@/lib/mockData';
+import { useMemo } from 'react';
 
 const GroupPrices = () => {
   const { user } = useAuth();
@@ -35,6 +36,7 @@ const GroupPrices = () => {
 
   const [selectedGroup, setSelectedGroup] = useState('');
   const [selectedBase, setSelectedBase] = useState('');
+  const [selectedSupplier, setSelectedSupplier] = useState('');
   const [selectedDate, setSelectedDate] = useState(() => {
     const today = new Date();
     return today.toISOString().split('T')[0];
@@ -43,6 +45,7 @@ const GroupPrices = () => {
   const [groupData, setGroupData] = useState(null);
   const [priceData, setPriceData] = useState({});
   const [stationPrices, setStationPrices] = useState({}); // Individual station prices
+  const [supplierInfo, setSupplierInfo] = useState({}); // Supplier info by station and fuel
   const [targetPrices, setTargetPrices] = useState({}); // Target prices for the group (with base)
   const [manuallyMarkedIncorrect, setManuallyMarkedIncorrect] = useState(new Set());
 
@@ -62,7 +65,6 @@ const GroupPrices = () => {
   useEffect(() => {
     if (!userId) return;
 
-    console.log('🔄 GroupPrices: Configurando subscriptions realtime...');
     
     // Subscription para daily_prices (crítico - preços mudam constantemente)
     const dailyPricesSubscription = supabase
@@ -110,7 +112,6 @@ const GroupPrices = () => {
       .subscribe();
 
     return () => {
-      console.log('🔄 GroupPrices: Removendo subscriptions realtime...');
       dailyPricesSubscription.unsubscribe();
       groupsSubscription.unsubscribe();
       postosSubscription.unsubscribe();
@@ -321,6 +322,40 @@ const GroupPrices = () => {
     });
     return minPrices;
   };
+
+  // Calculate price comparisons for suppliers (bandeira branca analysis)
+  const priceComparisons = useMemo(() => {
+    if (!groupData || groupData.bandeira !== 'bandeira_branca') return {};
+    
+    const comparisons = {};
+    Object.keys(settings.fuelTypes || {}).forEach(fuel => {
+      const supplierPrices = [];
+      
+      // Collect prices from all available suppliers for this fuel
+      Object.values(priceData).forEach(prices => {
+        if (prices[fuel] && !isNaN(prices[fuel]) && prices[fuel] > 0) {
+          supplierPrices.push({
+            price: prices[fuel],
+            supplier: 'Fornecedor' // We don't have supplier names in priceData
+          });
+        }
+      });
+      
+      if (supplierPrices.length > 0) {
+        // Sort by price
+        supplierPrices.sort((a, b) => a.price - b.price);
+        
+        comparisons[fuel] = {
+          cheapest: supplierPrices[0],
+          secondCheapest: supplierPrices[1] || null,
+          difference: supplierPrices[1] ? supplierPrices[1].price - supplierPrices[0].price : 0,
+          totalSuppliers: supplierPrices.length
+        };
+      }
+    });
+    
+    return comparisons;
+  }, [groupData, priceData, settings.fuelTypes]);
 
   const handleSaveTargetPrices = async () => {
     if (!selectedGroup) return;
@@ -798,12 +833,12 @@ const GroupPrices = () => {
                   </Button>
                   <Button
                     variant="outline"
-                    onClick={() => setEditingMode(!editingMode)}
+                    onClick={() => setEditMode(!editMode)}
                   >
                     <Edit3 className="w-4 h-4 mr-2" />
-                    {editingMode ? 'Cancelar' : 'Editar'}
+                    {editMode ? 'Cancelar' : 'Editar'}
                   </Button>
-                  {editingMode && (
+                  {editMode && (
                     <Button onClick={handleSave} disabled={saving}>
                       <Save className="w-4 h-4 mr-2" />
                       {saving ? 'Salvando...' : 'Salvar'}
@@ -813,7 +848,7 @@ const GroupPrices = () => {
               </div>
             </CardHeader>
             <CardContent>
-              {editingMode && selectedPostos.length > 0 && (
+              {editMode && selectedPostos.length > 0 && (
                 <Alert className="mb-4">
                   <div className="space-y-2">
                     <p className="text-sm font-medium">

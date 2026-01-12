@@ -159,7 +159,6 @@ const SettingsPage = () => {
   useEffect(() => {
     if (!userId) return;
 
-    console.log('🔄 SettingsPage: Configurando subscriptions realtime...');
     
     // Subscription para groups (crítico - outros usuários criando/editando grupos)
     const groupsSubscription = supabase
@@ -246,7 +245,6 @@ const SettingsPage = () => {
       .subscribe();
 
     return () => {
-      console.log('🔄 SettingsPage: Removendo subscriptions realtime...');
       groupsSubscription.unsubscribe();
       postosSubscription.unsubscribe();
       suppliersSubscription.unsubscribe();
@@ -298,13 +296,15 @@ const SettingsPage = () => {
               is_base: !!dataToSave.is_base,
             };
           case 'groups': {
-            const baseCityId = Array.isArray(dataToSave.base_city_ids)
-              ? dataToSave.base_city_ids[0]
-              : dataToSave.base_city_id;
+            // Handle multiple loading bases properly
+            const baseCityIds = Array.isArray(dataToSave.base_city_ids) 
+              ? dataToSave.base_city_ids 
+              : (dataToSave.base_city_id ? [dataToSave.base_city_id] : []);
 
             return {
               name: dataToSave.name,
-              base_city_id: baseCityId || null,
+              bandeira: dataToSave.bandeira || 'bandeira_branca',
+              base_city_ids: baseCityIds.length > 0 ? baseCityIds : null,
               posto_ids: Array.isArray(dataToSave.posto_ids) ? dataToSave.posto_ids : null,
               allowed_supplier_ids: Array.isArray(dataToSave.allowed_supplier_ids)
                 ? dataToSave.allowed_supplier_ids
@@ -342,6 +342,7 @@ const SettingsPage = () => {
             return {
               name: dataToSave.name,
               city_id: dataToSave.city_id,
+              bandeira: dataToSave.bandeira || 'bandeira_branca',
               allowed_supply_cities: Array.isArray(dataToSave.allowed_supply_cities) ? dataToSave.allowed_supply_cities : [],
               group_ids: Array.isArray(dataToSave.group_ids) ? dataToSave.group_ids : [],
               is_base: !!dataToSave.is_base,
@@ -363,19 +364,39 @@ const SettingsPage = () => {
       
       const record = { ...sanitizedData, user_id: user.id };
       
-      const { error, data: savedRecord } = await supabase
-        .from(tableName)
-        .upsert(record, {
-          onConflict: tableName === 'groups' ? 'user_id,name' : 
-                     tableName === 'postos' ? 'user_id,name' : 
-                     tableName === 'suppliers' ? 'id' : // CORRIGIDO: suppliers usa apenas 'id' 
-                     tableName === 'base_cities' ? 'user_id,name' :
-                     tableName === 'cities' ? 'user_id,name' :
-                     tableName === 'freight_routes' ? 'user_id,origin_city_id,destination_city_id' : undefined
-        })
-        .select()
-        .single();
-      if (error) throw error;
+      // Para atualizações com ID existente, usar update ao invés de upsert
+      let savedRecord;
+      if (dataToSave.id) {
+        // Update existing record
+        const { id, ...recordWithoutId } = record;
+        const { error, data } = await supabase
+          .from(tableName)
+          .update(recordWithoutId)
+          .eq('id', dataToSave.id)
+          .eq('user_id', userId)
+          .select()
+          .single();
+        
+        if (error) throw error;
+        savedRecord = data;
+      } else {
+        // Insert new record
+        const { error, data } = await supabase
+          .from(tableName)
+          .upsert(record, {
+            onConflict: tableName === 'groups' ? 'user_id,name' : 
+                       tableName === 'postos' ? 'user_id,name' : 
+                       tableName === 'suppliers' ? 'id' : 
+                       tableName === 'base_cities' ? 'user_id,name' :
+                       tableName === 'cities' ? 'user_id,name' :
+                       tableName === 'freight_routes' ? 'user_id,origin_city_id,destination_city_id' : undefined
+          })
+          .select()
+          .single();
+        
+        if (error) throw error;
+        savedRecord = data;
+      }
       
       console.log('✅ Registro salvo:', { tableName, savedRecord });
       

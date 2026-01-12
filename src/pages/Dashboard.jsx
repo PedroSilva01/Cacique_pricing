@@ -71,7 +71,6 @@ const Dashboard = () => {
     useEffect(() => {
         if (!userId) return;
 
-        console.log('🔄 Dashboard: Configurando subscriptions realtime...');
         
         // Subscription para daily_prices (preços em tempo real)
         const dailyPricesSubscription = supabase
@@ -126,7 +125,6 @@ const Dashboard = () => {
             .subscribe();
 
         return () => {
-            console.log('🔄 Dashboard: Removendo subscriptions realtime...');
             dailyPricesSubscription.unsubscribe();
             groupsSubscription.unsubscribe();
             postosSubscription.unsubscribe();
@@ -280,7 +278,6 @@ const Dashboard = () => {
                     };
                 }
 
-                console.log('🗄️ Preço de petróleo carregado do banco:', oilData);
                 setOilPrice(oilData);
 
                 const now = new Date();

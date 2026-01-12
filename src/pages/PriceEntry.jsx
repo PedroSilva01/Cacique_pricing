@@ -220,17 +220,9 @@ const PriceEntry = () => {
     setLoadingGroupsStatus(true);
     try {
       const today = getLocalDateString();
-      console.log('🔍 DEBUG - Buscando status completo dos grupos para:', { today, totalGroups: groups.length });
-
+  
       // NOVO DEBUG: Primeiro, vamos ver TODOS os registros que foram salvos hoje
       const { data: allTodayData } = await supabase
-        .from('daily_prices')
-        .select('*')
-        .eq('date', today)
-        .eq('user_id', userId);
-
-      console.log('🔍 DEBUG - TODOS os registros salvos hoje:', allTodayData);
-
       // Buscar todos os registros de preços de hoje para todos os grupos
       const { data: todayPrices, error } = await supabase
         .from('daily_prices')
@@ -393,14 +385,7 @@ const PriceEntry = () => {
 
   // Carregar status dos grupos quando dados estiverem prontos
   useEffect(() => {
-    console.log('🔍 DEBUG - UseEffect groupsStatus:', {
-      groupsLength: groups.length,
-      postosLength: postos.length,
-      baseCitiesLength: baseCities.length
-    });
-    
     if (groups.length > 0 && postos.length > 0 && baseCities.length > 0) {
-      console.log('🔍 DEBUG - Chamando fetchGroupsWithoutUpdates...');
       fetchGroupsWithoutUpdates();
     }
   }, [groups.length, postos.length, baseCities.length, fetchGroupsWithoutUpdates]);
@@ -409,7 +394,6 @@ const PriceEntry = () => {
   useEffect(() => {
     if (!userId) return;
 
-    console.log('🔄 Configurando subscription realtime para daily_prices...');
     
     // Criar subscription para mudanças na tabela daily_prices
     const subscription = supabase
@@ -423,29 +407,23 @@ const PriceEntry = () => {
           filter: `user_id=eq.${userId}` // Apenas mudanças do usuário atual
         },
         (payload) => {
-          console.log('🔄 Realtime update recebido:', payload);
-          
           // Atualizar status dos grupos automaticamente
           if (groups.length > 0 && postos.length > 0 && baseCities.length > 0) {
-            console.log('🔄 Auto-atualizando status dos grupos via realtime...');
             fetchGroupsWithoutUpdates();
           }
           
           // Também atualizar histórico se estiver na data atual
           const today = getLocalDateString();
           if (recentPricesFilterDate === today) {
-            console.log('🔄 Auto-atualizando histórico de preços via realtime...');
             fetchRecentPrices(pricesPage);
           }
         }
       )
       .subscribe((status) => {
-        console.log('🔄 Status da subscription realtime:', status);
       });
 
     // Cleanup da subscription
     return () => {
-      console.log('🔄 Removendo subscription realtime...');
       subscription.unsubscribe();
     };
   }, [userId, groups.length, postos.length, baseCities.length, recentPricesFilterDate, pricesPage, fetchGroupsWithoutUpdates, fetchRecentPrices]);

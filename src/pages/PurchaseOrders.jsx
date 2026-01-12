@@ -119,7 +119,7 @@ const PurchaseOrders = () => {
     const htmlContent = `
       <html>
         <head>
-          <title>Pedidos do Dia - ${viewDate}</title>
+          <title>Pedidos do Período - ${startDate} a ${endDate}</title>
           <style>
             body { font-family: Arial, sans-serif; margin: 20px; }
             h1 { color: #333; }
@@ -131,9 +131,9 @@ const PurchaseOrders = () => {
           </style>
         </head>
         <body>
-          <h1>Pedidos do Dia</h1>
+          <h1>Pedidos do Período</h1>
           <div class="date-info">
-            Data: ${new Date(viewDate).toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+            Período: ${new Date(startDate + 'T00:00:00').toLocaleDateString('pt-BR')} a ${new Date(endDate + 'T00:00:00').toLocaleDateString('pt-BR')}
           </div>
           <table>
             <thead>
@@ -189,7 +189,12 @@ const PurchaseOrders = () => {
   const [filtersExpanded, setFiltersExpanded] = useState(true);
   const [selectedBrand, setSelectedBrand] = useState('all');
   const [selectedBase, setSelectedBase] = useState('all');
-  const [viewDate, setViewDate] = useState(() => {
+  // Filtros individuais com data padrão do dia atual
+  const [startDate, setStartDate] = useState(() => {
+    const today = new Date();
+    return today.toISOString().split('T')[0];
+  });
+  const [endDate, setEndDate] = useState(() => {
     const today = new Date();
     return today.toISOString().split('T')[0];
   });
@@ -238,7 +243,62 @@ const PurchaseOrders = () => {
   useEffect(() => {
     if (!userId) return;
     loadOrders();
-  }, [userId, viewDate, selectedBrand, selectedBase]);
+  }, [userId, startDate, endDate, selectedBrand, selectedBase]);
+
+  // Realtime subscription para atualizações automáticas
+  useEffect(() => {
+    if (!userId) return;
+
+    const channel = supabase
+      .channel('purchase-orders-realtime')
+      .on('postgres_changes', 
+        { 
+          event: '*', 
+          schema: 'public', 
+          table: 'purchase_orders',
+          filter: `user_id=eq.${userId}`
+        }, 
+        (payload) => {
+          // Recarregar dados quando houver mudanças - usar timeout para evitar problemas de timing
+          setTimeout(() => {
+            if (userId) {
+              // Chama loadOrders diretamente aqui
+              const reloadData = async () => {
+                try {
+                  const startDateTime = new Date(startDate + 'T00:00:00');
+                  const endDateTime = new Date(endDate + 'T23:59:59');
+                  
+                  const { data, error } = await supabase
+                    .from('purchase_orders')
+                    .select('*, postos(*, cities(*)), groups(*), suppliers(*), base_cities(*)')
+                    .eq('user_id', userId)
+                    .gte('created_at', startDateTime.toISOString())
+                    .lte('created_at', endDateTime.toISOString());
+      
+                  if (error) throw error;
+                  
+                  const filteredOrders = data || [];
+                  
+                  setOrders(filteredOrders.sort((a, b) => {
+                    const aNum = parseInt(a.id?.split('-').pop() || a.id || '0');
+                    const bNum = parseInt(b.id?.split('-').pop() || b.id || '0');
+                    return aNum - bNum;
+                  }));
+                } catch (err) {
+                  console.error('Erro ao recarregar pedidos (realtime):', err);
+                }
+              };
+              reloadData();
+            }
+          }, 100);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [userId, startDate, endDate]);
 
   const loadInitialData = async () => {
     setLoading(true);
@@ -259,20 +319,6 @@ const PurchaseOrders = () => {
       if (settingsRes.error && settingsRes.error.code !== 'PGRST116') throw settingsRes.error;
       if (routesRes.error) throw routesRes.error;
 
-      console.log('📋 Dados carregados:', {
-        postos: postosRes.data?.length || 0,
-        groups: groupsRes.data?.length || 0,
-        suppliers: suppliersRes.data?.length || 0,
-        bases: basesRes.data?.length || 0,
-        groupsWithTargetPrices: groupsRes.data?.filter(g => g.target_prices && Object.keys(g.target_prices).length > 0).length || 0,
-        groups: groupsRes.data?.map(g => ({
-          id: g.id,
-          name: g.name,
-          hasTargetPrices: !!g.target_prices,
-          targetPricesKeys: g.target_prices ? Object.keys(g.target_prices) : []
-        }))
-      });
-      
       setPostos(postosRes.data || []);
       setGroups(groupsRes.data || []);
       setSuppliers(suppliersRes.data || []);
@@ -292,28 +338,22 @@ const PurchaseOrders = () => {
     if (!userId) return;
     
     try {
+      // Buscar pedidos do usuário filtrados por data de criação (timestamp) - timezone brasileiro UTC-3
+      const startDateTime = new Date(startDate + 'T00:00:00');
+      const endDateTime = new Date(endDate + 'T23:59:59');
+      
       const { data, error } = await supabase
         .from('purchase_orders')
         .select('*, postos(*, cities(*)), groups(*), suppliers(*), base_cities(*)')
         .eq('user_id', userId)
-        .eq('order_date', viewDate);
+        .gte('created_at', startDateTime.toISOString())
+        .lte('created_at', endDateTime.toISOString());
 
       if (error) throw error;
       
-      console.log('📋 Pedidos carregados do banco:', {
-        count: data?.length || 0,
-        data: data?.map(o => ({
-          id: o.id,
-          target_price: o.target_price,
-          unit_price: o.unit_price,
-          volume: o.volume,
-          daily_financial_cost: o.daily_financial_cost,
-          price_difference: o.price_difference,
-          payment_term_days: o.payment_term_days
-        }))
-      });
+      const filteredOrders = data || [];
       
-      setOrders((data || []).sort((a, b) => {
+      setOrders(filteredOrders.sort((a, b) => {
         // Extract numeric part from order ID (assuming format like "order-1", "order-2", etc.)
         const aNum = parseInt(a.id?.split('-').pop() || a.id || '0');
         const bNum = parseInt(b.id?.split('-').pop() || b.id || '0');
@@ -322,7 +362,7 @@ const PurchaseOrders = () => {
     } catch (err) {
       console.error('Erro ao carregar pedidos:', err);
     }
-  }, [userId, viewDate]);
+  }, [userId, startDate, endDate]);
 
   const getTargetPrice = useCallback((stationId, fuelType, baseId, supplierId = null) => {
     const posto = postos.find(p => p.id === stationId);
@@ -365,23 +405,9 @@ const PurchaseOrders = () => {
     }
 
     if (!foundGroup) {
-      console.log('⚠️ Nenhum grupo com target_prices:', { 
-        stationId, 
-        posto: posto.name, 
-        groupIds: postoGroupIds 
-      });
       return null;
     }
     
-    console.log('🎯 Buscando target_price:', {
-      stationId,
-      fuelType,
-      baseId,
-      supplierId,
-      groupId: foundGroup.id,
-      groupName: foundGroup.name,
-      targetPrice
-    });
     
     return targetPrice || null;
   }, [postos, groups, suppliers]);
@@ -393,8 +419,8 @@ const PurchaseOrders = () => {
     const fetchDailyPrices = async () => {
       if (!userId || !selectedBase || selectedBase === 'all') return;
       
-      // Usar invoiceDate se estiver disponível, senão viewDate
-      const dateToUse = invoiceDate || viewDate;
+      // Usar invoiceDate se estiver disponível, senão startDate
+      const dateToUse = invoiceDate || startDate;
       
       try {
         const { data, error } = await supabase
@@ -406,13 +432,6 @@ const PurchaseOrders = () => {
         
         if (error) throw error;
         
-        console.log('🔍 Daily Prices carregados:', {
-          date: dateToUse,
-          base: selectedBase,
-          count: data?.length || 0,
-          prices: data
-        });
-        
         setDailyPrices(data || []);
       } catch (err) {
         console.error('Erro ao buscar preços diários:', err);
@@ -420,7 +439,7 @@ const PurchaseOrders = () => {
     };
 
     fetchDailyPrices();
-  }, [userId, selectedBase, viewDate, invoiceDate]);
+  }, [userId, selectedBase, startDate, invoiceDate]);
 
   const getDailyPrice = useCallback((fuelType, supplierId) => {
     if (!supplierId || dailyPrices.length === 0) return null;
@@ -581,7 +600,7 @@ const PurchaseOrders = () => {
 
         const orderData = {
           user_id: userId,
-          order_date: viewDate,
+          order_date: invoiceDate || startDate,
           station_id: selectedStation,
           supplier_id: entry.specificSupplier || selectedSupplier,
           fuel_type: entry.fuelType,
@@ -598,8 +617,8 @@ const PurchaseOrders = () => {
           delivery_date: entry.deliveryDate || null
         };
 
-        if (groupId) {
-          orderData.group_id = groupId;
+        if (primaryGroupId) {
+          orderData.group_id = primaryGroupId;
         }
 
         return orderData;
@@ -608,9 +627,7 @@ const PurchaseOrders = () => {
       for (const order of ordersToSave) {
         const { error } = await supabase
           .from('purchase_orders')
-          .upsert(order, {
-            onConflict: 'user_id, station_id, order_date, fuel_type, supplier_id'
-          });
+          .insert(order);
 
         if (error) throw error;
       }
@@ -667,23 +684,10 @@ const PurchaseOrders = () => {
   }, [orders, selectedBrand, selectedBase]);
 
   const statistics = useMemo(() => {
-    console.log('🔍 Pedidos para calcular KPI:', {
-      filtered: filteredOrders.length,
-      orders: filteredOrders.map(o => ({
-        id: o.id,
-        target_price: o.target_price,
-        unit_price: o.unit_price,
-        volume: o.volume,
-        daily_financial_cost: o.daily_financial_cost,
-        price_difference: o.price_difference,
-        payment_term_days: o.payment_term_days
-      }))
-    });
 
     const incorrect = filteredOrders.filter(o => {
       const targetPrice = o.target_price || getTargetPrice(o.station_id, o.fuel_type, o.base_city_id, o.supplier_id);
       if (!targetPrice) {
-        console.log('⚠️ Pedido sem target_price:', o.id);
         return false;
       }
       
@@ -692,13 +696,6 @@ const PurchaseOrders = () => {
       const isIncorrect = Math.abs(effectivePrice - targetPrice) > 0.01;
       
       if (isIncorrect) {
-        console.log('🔴 Pedido fora do alvo:', {
-          id: o.id,
-          targetPrice,
-          effectivePrice,
-          difference: effectivePrice - targetPrice,
-          price_difference: o.price_difference
-        });
       }
       
       return isIncorrect;
@@ -712,11 +709,6 @@ const PurchaseOrders = () => {
       return sum + (o.price_difference || 0);
     }, 0);
 
-    console.log('📊 KPI Calculado:', {
-      total: filteredOrders.length,
-      incorrect: incorrect.length,
-      extraCost: totalExtra
-    });
 
     return {
       total: filteredOrders.length,
@@ -818,7 +810,7 @@ const PurchaseOrders = () => {
               transition={{ duration: 0.2 }}
             >
               <CardContent className="pt-0">
-                <div className="grid md:grid-cols-3 gap-6">
+                <div className="grid md:grid-cols-4 gap-6">
                   <div>
                     <Label className="text-sm font-semibold mb-2 block">Bandeira</Label>
                     <Select value={selectedBrand} onValueChange={setSelectedBrand}>
@@ -850,10 +842,19 @@ const PurchaseOrders = () => {
                   </div>
 
                   <div>
-                    <Label className="text-sm font-semibold mb-2 block">Data</Label>
+                    <Label className="text-sm font-semibold mb-2 block">Data Inicial</Label>
                     <DatePicker
-                      value={viewDate}
-                      onChange={setViewDate}
+                      value={startDate}
+                      onChange={setStartDate}
+                      className="h-12"
+                    />
+                  </div>
+                  
+                  <div>
+                    <Label className="text-sm font-semibold mb-2 block">Data Final</Label>
+                    <DatePicker
+                      value={endDate}
+                      onChange={setEndDate}
                       className="h-12"
                     />
                   </div>
@@ -1261,18 +1262,16 @@ const PurchaseOrders = () => {
           <div className="flex items-center justify-between gap-6">
             <div className="flex items-center gap-4">
               <div>
-                <CardTitle className="text-2xl font-bold">Pedidos do Dia</CardTitle>
+                <CardTitle className="text-2xl font-bold">Pedidos do Período</CardTitle>
                 <CardDescription className="text-base mt-1">
-                  {new Date(viewDate + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                  {startDate === endDate 
+                    ? new Date(startDate + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+                    : `${new Date(startDate + 'T12:00:00').toLocaleDateString('pt-BR')} a ${new Date(endDate + 'T12:00:00').toLocaleDateString('pt-BR')}`
+                  }
                 </CardDescription>
               </div>
             </div>
             <div className="flex items-center gap-4">
-              <DatePicker
-                value={viewDate}
-                onChange={setViewDate}
-                className="w-44"
-              />
               <Button variant="outline" size="sm" onClick={exportToPDF}>
                 <Download className="w-4 h-4 mr-2" />
                 Exportar PDF

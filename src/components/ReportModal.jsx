@@ -10,9 +10,11 @@ const ReportModal = ({ reportData, onClose, onExport }) => {
   if (!reportData) return null;
 
   const { stations, fuel, destination, date } = reportData;
-  const bestOption = stations[0];
-  const worstOption = stations[stations.length - 1];
-  const totalSavings = (worstOption.finalPrice - bestOption.finalPrice);
+  const bestOption = stations?.[0];
+  const worstOption = stations?.[stations.length - 1];
+  const totalSavings = (worstOption?.finalPrice && bestOption?.finalPrice) 
+    ? (worstOption.finalPrice - bestOption.finalPrice) 
+    : 0;
 
   return (
     <motion.div
@@ -53,7 +55,7 @@ const ReportModal = ({ reportData, onClose, onExport }) => {
               <div className="p-4 bg-green-500/10 rounded-lg border border-green-500/30">
                 <p className="text-sm font-medium text-green-400">Economia Potencial</p>
                 <p className="text-lg font-bold text-green-500">
-                  {totalSavings.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/L
+                  {(totalSavings || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/L
                 </p>
               </div>
             </div>
@@ -64,7 +66,7 @@ const ReportModal = ({ reportData, onClose, onExport }) => {
                 <h3 className="text-lg font-bold text-green-400">Melhor Opção de Compra</h3>
               </div>
               <p className="text-base">
-                <span className="font-semibold">{bestOption.brand} - {bestOption.name}</span> com preço final de <span className="font-bold">{bestOption.finalPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 4 })}/L</span>.
+                <span className="font-semibold">{bestOption?.brand || bestOption?.name || 'N/A'} - {bestOption?.name || 'N/A'}</span> com preço final de <span className="font-bold">{(bestOption?.finalPrice || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 4 })}/L</span>.
               </p>
             </div>
 
@@ -82,18 +84,18 @@ const ReportModal = ({ reportData, onClose, onExport }) => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {stations.map((item, index) => (
-                      <TableRow key={item.name} className={cn(index === 0 ? "bg-green-500/10" : "")}>
+                    {stations?.map((item, index) => (
+                      <TableRow key={item?.name || index} className={cn(index === 0 ? "bg-green-500/10" : "")}>
                         <TableCell className="font-semibold">{index + 1}</TableCell>
                         <TableCell>
-                          <div className="font-semibold">{item.name}</div>
-                          <div className="text-xs text-muted-foreground">{item.brand}</div>
+                          <div className="font-semibold">{item?.name || 'N/A'}</div>
+                          <div className="text-xs text-muted-foreground">{item?.brand || ''}</div>
                         </TableCell>
-                        <TableCell className="text-right">{item.currentPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 4 })}</TableCell>
-                        <TableCell className="text-right">{item.freightCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 4 })}</TableCell>
-                        <TableCell className="text-right font-bold text-base text-primary">{item.finalPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 4 })}</TableCell>
+                        <TableCell className="text-right">{(item?.currentPrice || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 4 })}</TableCell>
+                        <TableCell className="text-right">{(item?.freight || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 4 })}</TableCell>
+                        <TableCell className="text-right font-bold text-base text-primary">{(item?.finalPrice || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 4 })}</TableCell>
                       </TableRow>
-                    ))}
+                    )) || []}
                   </TableBody>
                 </Table>
               </div>

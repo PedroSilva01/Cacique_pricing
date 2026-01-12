@@ -14,6 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import BrandBadge from '@/components/ui/BrandBadge';
 import { DatePicker } from '@/components/ui/date-picker';
+import Pagination from '@/components/ui/pagination';
 
 const PurchaseOrders = () => {
   const { user } = useAuth();
@@ -29,6 +30,10 @@ const PurchaseOrders = () => {
   const [baseCities, setBaseCities] = useState([]);
   const [settings, setSettings] = useState({});
   const [financialCostRate, setFinancialCostRate] = useState(0.00535);
+  
+  // Estados para paginação
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage] = useState(30);
   
   const financialRatesByBrand = {
     ipiranga: 0.00492,
@@ -683,6 +688,20 @@ const PurchaseOrders = () => {
     });
   }, [orders, selectedBrand, selectedBase]);
 
+  // Paginação dos pedidos filtrados
+  const paginatedOrders = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    return filteredOrders.slice(startIndex, endIndex);
+  }, [filteredOrders, currentPage, itemsPerPage]);
+  
+  const totalPages = Math.ceil(filteredOrders.length / itemsPerPage);
+  
+  // Reset página quando filtros mudarem
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [startDate, endDate, selectedBrand, selectedBase]);
+
   const statistics = useMemo(() => {
 
     const incorrect = filteredOrders.filter(o => {
@@ -1297,14 +1316,14 @@ const PurchaseOrders = () => {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredOrders.length === 0 ? (
+                {paginatedOrders.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
-                      Nenhum pedido encontrado para esta data
+                      {filteredOrders.length === 0 ? 'Nenhum pedido encontrado para esta data' : 'Carregando...'}
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filteredOrders.map((order) => {
+                  paginatedOrders.map((order) => {
                     const calc = calculatePrice(order.total_cost || (order.unit_price * order.volume * 1000), order.volume, order.payment_term_days);
 
                     return (
@@ -1361,6 +1380,19 @@ const PurchaseOrders = () => {
               </TableBody>
             </Table>
           </div>
+          
+          {/* Paginação */}
+          {filteredOrders.length > itemsPerPage && (
+            <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-700">
+              <Pagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                totalItems={filteredOrders.length}
+                itemsPerPage={itemsPerPage}
+                onPageChange={setCurrentPage}
+              />
+            </div>
+          )}
         </CardContent>
       </Card>
       </div>

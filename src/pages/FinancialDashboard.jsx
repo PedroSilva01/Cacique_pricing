@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { DatePicker } from '@/components/ui/date-picker';
 import { WeekPicker } from '@/components/ui/week-picker';
 import { Download, TrendingUp, TrendingDown, DollarSign, Truck, Filter, BarChart3, AlertTriangle, FileText } from 'lucide-react';
+import Pagination from '@/components/ui/pagination';
 import { useToast } from '@/components/ui/use-toast';
 import { motion } from 'framer-motion';
 
@@ -70,6 +71,10 @@ export default function FinancialDashboard() {
   });
   const [showLimitsModal, setShowLimitsModal] = useState(false);
   const [editingLimits, setEditingLimits] = useState({});
+  
+  // Estados para paginação
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage] = useState(30);
 
   const [startDate, setStartDate] = useState(() => {
     // Primeiro dia do mês atual em horário local brasileiro
@@ -424,6 +429,16 @@ export default function FinancialDashboard() {
     
     return payments;
   }, [orders, selectedWeek]);
+  
+  // Paginação dos pedidos filtrados
+  const paginatedOrders = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    return filteredOrders.slice(startIndex, endIndex);
+  }, [filteredOrders, currentPage, itemsPerPage]);
+  
+  const totalPages = Math.ceil(filteredOrders.length / itemsPerPage);
+  
   const summary = useMemo(() => {
     let totalVolume = 0;
     let totalValue = 0;
@@ -483,6 +498,11 @@ export default function FinancialDashboard() {
       creditValue
     };
   }, [filteredOrders, postos]);
+  
+  // Reset página quando filtros mudarem
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [startDate, endDate, selectedBrand]);
   
   
   // Dias da semana para exibição (apenas dias úteis para limites)
@@ -1046,7 +1066,7 @@ export default function FinancialDashboard() {
                   R$ {formatCurrency(
                     Object.entries(weeklyLimits)
                       .filter(([key]) => weekDays.find(d => d.key === parseInt(key))?.hasLimit)
-                      .reduce((sum, [, limit]) => sum + (limit || 0), 0)
+                      .reduce((sum, [, limit]) => sum + (parseFloat(limit) || 0), 0)
                   )}
                 </div>
                 <div className="text-sm text-blue-600 dark:text-blue-400 mt-2">Total a Pagar:</div>
@@ -1224,7 +1244,7 @@ export default function FinancialDashboard() {
                 </tr>
               </thead>
               <tbody>
-                {filteredOrders.map(order => {
+                {paginatedOrders.map(order => {
                   const posto = postos.find(p => p.id === order.station_id);
                   const rate = posto ? (financialRatesByBrand[posto.bandeira] || 0.00535) : 0.00535;
                   const financialCost = rate * (order.payment_term_days || 0) * (order.volume || 0);
@@ -1266,6 +1286,19 @@ export default function FinancialDashboard() {
               </tbody>
             </table>
           </div>
+          
+          {/* Paginação */}
+          {filteredOrders.length > itemsPerPage && (
+            <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-700">
+              <Pagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                totalItems={filteredOrders.length}
+                itemsPerPage={itemsPerPage}
+                onPageChange={setCurrentPage}
+              />
+            </div>
+          )}
         </CardContent>
       </Card>
       </div>

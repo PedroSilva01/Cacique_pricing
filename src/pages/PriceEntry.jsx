@@ -914,46 +914,68 @@ const PriceEntry = () => {
         }
       });
 
-      // CORRIGIDO: Verificar se já existe registro - SEM fazer merge automático de grupos
-      const { data: existingRecords, error: existingError } = await supabase
+      // CORRIGIDO: Buscar registros existentes e fazer merge inteligente preservando outros grupos
+      const { data: existingRecords, error: searchError } = await supabase
         .from('daily_prices')
-        .select('group_ids, prices, maintained_prices')
+        .select('group_ids, prices, maintained_prices, id')
         .eq('user_id', user.id)
         .eq('supplier_id', selectedSupplier)
         .eq('base_city_id', selectedBase)
         .eq('date', date);
 
-      const existingRecord = existingRecords && existingRecords.length > 0 ? existingRecords[0] : null;
-
-      // DEBUG: Log para verificar operação
-      if (existingRecord) {
-        console.log('📦 SOBRESCRITA - Registro existente encontrado:', {
-          existing_groups: existingRecord.group_ids,
-          new_groups: selectedGroups,
-          supplier: selectedSupplier,
-          base: selectedBase,
-          date,
-          operation: 'SOBRESCREVER (não merge)'
-        });
+      if (searchError) {
+        console.error('Erro ao buscar registros existentes:', searchError);
       }
 
-      // CORRIGIDO: Usar APENAS os grupos selecionados (não fazer merge automático)
-      const finalGroupIds = selectedGroups;
-
-      console.log('📦 GRUPOS FINAIS - Aplicar apenas aos selecionados:', {
-        finalGroupIds,
-        wasExisting: !!existingRecord,
-        operation: 'SOBRESCRITA_COMPLETA'
+      // DEBUG: Log para verificar registros existentes
+      console.log('🔍 MERGE INTELIGENTE - Registros existentes:', {
+        existingRecords: existingRecords?.map(r => ({ id: r.id, groups: r.group_ids })),
+        selectedGroups,
+        supplier: selectedSupplier,
+        base: selectedBase,
+        date
       });
 
-      // Fazer merge apenas dos preços mantendo os existentes e adicionando/atualizando os novos
-      const finalPrices = existingRecord
-        ? { ...existingRecord.prices, ...prices }
-        : prices;
+      let finalGroupIds = [...selectedGroups];
+      let finalPrices = { ...prices };
+      let finalMaintained = { ...maintained };
 
-      // Fazer merge dos maintained_prices
-      const existingMaintained = existingRecord?.maintained_prices || {};
-      const finalMaintained = { ...existingMaintained, ...maintained };
+      // Se existem registros, fazer merge preservando grupos não selecionados
+      if (existingRecords && existingRecords.length > 0) {
+        // Coletar todos os grupos existentes EXCETO os que estão sendo atualizados
+        const existingGroupIds = existingRecords.flatMap(r => r.group_ids || []);
+        const groupsToPreserve = existingGroupIds.filter(gId => !selectedGroups.includes(gId));
+        
+        // Merge: grupos preservados + grupos selecionados (sem duplicatas)
+        finalGroupIds = [...new Set([...groupsToPreserve, ...selectedGroups])];
+        
+        // Merge preços de todos os registros existentes + novos preços
+        existingRecords.forEach(record => {
+          finalPrices = { ...finalPrices, ...record.prices };
+          finalMaintained = { ...finalMaintained, ...(record.maintained_prices || {}) };
+        });
+        finalPrices = { ...finalPrices, ...prices }; // Novos preços sobrescrevem
+
+        // Deletar todos os registros existentes antes de inserir o consolidado
+        const { error: deleteError } = await supabase
+          .from('daily_prices')
+          .delete()
+          .eq('user_id', user.id)
+          .eq('supplier_id', selectedSupplier)
+          .eq('base_city_id', selectedBase)
+          .eq('date', date);
+
+        if (deleteError) {
+          console.error('Erro ao deletar registros para consolidação:', deleteError);
+        }
+
+        console.log('📦 MERGE CONSOLIDADO:', {
+          preserved_groups: groupsToPreserve,
+          selected_groups: selectedGroups,
+          final_groups: finalGroupIds,
+          operation: 'MERGE_WITH_PRESERVATION'
+        });
+      }
 
       const dataToSave = {
         user_id: user.id,
@@ -963,26 +985,21 @@ const PriceEntry = () => {
         prices: finalPrices,
         group_ids: finalGroupIds,
         maintained_prices: Object.keys(finalMaintained).length > 0 ? finalMaintained : {},
-        // CORRIGIDO: Forçar atualização do created_at quando há merge para mostrar horário correto
-        ...(existingRecord ? { created_at: new Date().toISOString() } : {})
+        created_at: new Date().toISOString()
       };
 
+      // Inserir registro consolidado
       const { error } = await supabase
         .from('daily_prices')
-        .upsert(dataToSave, { 
-          onConflict: 'user_id, date, supplier_id, base_city_id' 
-        });
+        .insert(dataToSave);
 
       if (error) throw error;
 
-      const actionType = existingRecord ? 'atualizados' : 'salvos';
       const groupNames = groups.filter(g => selectedGroups.includes(g.id)).map(g => g.name).join(', ');
       
       toast({
-        title: `✅ Preços ${actionType} com sucesso!`,
-        description: existingRecord 
-          ? `Preços atualizados para os grupos selecionados: ${groupNames} (${affectedPostos.length} posto(s))`
-          : `Aplicado a ${affectedPostos.length} posto(s) de ${selectedGroups.length} grupo(s): ${groupNames}`,
+        title: '✅ Preços salvos com sucesso!',
+        description: `Aplicado aos grupos selecionados: ${groupNames} (${affectedPostos.length} posto(s))`,
       });
 
       // Limpar formulário após salvar

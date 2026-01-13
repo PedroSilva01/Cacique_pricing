@@ -914,86 +914,56 @@ const PriceEntry = () => {
         }
       });
 
-      // CORRIGIDO: Buscar registros existentes e fazer merge inteligente preservando outros grupos
-      const { data: existingRecords, error: searchError } = await supabase
-        .from('daily_prices')
-        .select('group_ids, prices, maintained_prices, id')
-        .eq('user_id', user.id)
-        .eq('supplier_id', selectedSupplier)
-        .eq('base_city_id', selectedBase)
-        .eq('date', date);
-
-      if (searchError) {
-        console.error('Erro ao buscar registros existentes:', searchError);
-      }
-
-      // DEBUG: Log para verificar registros existentes
-      console.log('🔍 MERGE INTELIGENTE - Registros existentes:', {
-        existingRecords: existingRecords?.map(r => ({ id: r.id, groups: r.group_ids })),
-        selectedGroups,
+      // SOLUÇÃO FINAL: Registros individuais por grupo (após remoção da constraint)
+      console.log('🎯 SALVANDO PREÇOS - Registros individuais por grupo:', {
+        groups: selectedGroups,
         supplier: selectedSupplier,
         base: selectedBase,
-        date
+        date,
+        operation: 'INDIVIDUAL_RECORDS_PER_GROUP'
       });
 
-      let finalGroupIds = [...selectedGroups];
-      let finalPrices = { ...prices };
-      let finalMaintained = { ...maintained };
-
-      // Se existem registros, fazer merge preservando grupos não selecionados
-      if (existingRecords && existingRecords.length > 0) {
-        // Coletar todos os grupos existentes EXCETO os que estão sendo atualizados
-        const existingGroupIds = existingRecords.flatMap(r => r.group_ids || []);
-        const groupsToPreserve = existingGroupIds.filter(gId => !selectedGroups.includes(gId));
-        
-        // Merge: grupos preservados + grupos selecionados (sem duplicatas)
-        finalGroupIds = [...new Set([...groupsToPreserve, ...selectedGroups])];
-        
-        // Merge preços de todos os registros existentes + novos preços
-        existingRecords.forEach(record => {
-          finalPrices = { ...finalPrices, ...record.prices };
-          finalMaintained = { ...finalMaintained, ...(record.maintained_prices || {}) };
-        });
-        finalPrices = { ...finalPrices, ...prices }; // Novos preços sobrescrevem
-
-        // Deletar todos os registros existentes antes de inserir o consolidado
+      // 1. Deletar apenas registros dos grupos que estão sendo atualizados
+      for (const groupId of selectedGroups) {
         const { error: deleteError } = await supabase
           .from('daily_prices')
           .delete()
           .eq('user_id', user.id)
           .eq('supplier_id', selectedSupplier)
           .eq('base_city_id', selectedBase)
-          .eq('date', date);
+          .eq('date', date)
+          .contains('group_ids', [groupId]);
 
         if (deleteError) {
-          console.error('Erro ao deletar registros para consolidação:', deleteError);
+          console.error(`Erro ao deletar registros do grupo ${groupId}:`, deleteError);
+        } else {
+          console.log(`🗑️ Deletados registros existentes do grupo ${groupId}`);
         }
-
-        console.log('📦 MERGE CONSOLIDADO:', {
-          preserved_groups: groupsToPreserve,
-          selected_groups: selectedGroups,
-          final_groups: finalGroupIds,
-          operation: 'MERGE_WITH_PRESERVATION'
-        });
       }
 
-      const dataToSave = {
-        user_id: user.id,
-        supplier_id: selectedSupplier,
-        base_city_id: selectedBase,
-        date,
-        prices: finalPrices,
-        group_ids: finalGroupIds,
-        maintained_prices: Object.keys(finalMaintained).length > 0 ? finalMaintained : {},
-        created_at: new Date().toISOString()
-      };
+      // 2. Inserir novo registro individual para cada grupo selecionado
+      for (const groupId of selectedGroups) {
+        const dataToSave = {
+          user_id: user.id,
+          supplier_id: selectedSupplier,
+          base_city_id: selectedBase,
+          date,
+          prices,
+          group_ids: [groupId], // UM registro por grupo
+          maintained_prices: Object.keys(maintained).length > 0 ? maintained : {},
+        };
 
-      // Inserir registro consolidado
-      const { error } = await supabase
-        .from('daily_prices')
-        .insert(dataToSave);
+        const { error } = await supabase
+          .from('daily_prices')
+          .insert(dataToSave);
 
-      if (error) throw error;
+        if (error) {
+          console.error(`Erro ao inserir grupo ${groupId}:`, error);
+          throw error;
+        }
+
+        console.log(`✅ Grupo ${groupId} salvo como registro individual`);
+      }
 
       const groupNames = groups.filter(g => selectedGroups.includes(g.id)).map(g => g.name).join(', ');
       

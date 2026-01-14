@@ -593,9 +593,16 @@ const PurchaseOrders = () => {
 
     setSaving(true);
     try {
-      // CORRIGIDO: Para múltiplos grupos, usar o primeiro que tem target_prices
+      // CORRIGIDO: Validar se grupo do posto existe na lista de grupos carregados
       const postoGroupIds = posto?.group_ids || [];
-      const primaryGroupId = postoGroupIds.length > 0 ? postoGroupIds[0] : null;
+      const validGroupId = postoGroupIds.find(gId => groups.some(g => g.id === gId));
+      
+      console.log('🔍 Validação grupo posto:', {
+        postoGroupIds,
+        availableGroups: groups.map(g => g.id),
+        validGroupId,
+        posto: posto?.name
+      });
       
       const ordersToSave = productEntries.map(entry => {
         const calc = calculatePrice(entry.totalValue, entry.volume, entry.paymentDays, selectedStation, entry.specificSupplier);
@@ -622,8 +629,8 @@ const PurchaseOrders = () => {
           delivery_date: entry.deliveryDate || null
         };
 
-        if (primaryGroupId) {
-          orderData.group_id = primaryGroupId;
+        if (validGroupId) {
+          orderData.group_id = validGroupId;
         }
 
         return orderData;

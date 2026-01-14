@@ -24,7 +24,11 @@ const PriceEdit = () => {
   const [suppliers, setSuppliers] = useState([]);
   const [baseCities, setBaseCities] = useState([]);
 
-  const [selectedDate, setSelectedDate] = useState('');
+  // CORRIGIDO: Inicializar com data atual para evitar buscar dados do dia anterior
+  const [selectedDate, setSelectedDate] = useState(() => {
+    const today = new Date();
+    return today.toISOString().split('T')[0]; // Formato YYYY-MM-DD
+  });
   const [selectedGroup, setSelectedGroup] = useState('');
   const [selectedSupplier, setSelectedSupplier] = useState('');
   const [selectedBase, setSelectedBase] = useState('');
@@ -154,12 +158,16 @@ const PriceEdit = () => {
         price.group_ids?.forEach(groupId => groupIdsSet.add(groupId));
       });
 
-      // Filtrar grupos reais pelos IDs encontrados
-      const availableGroupsList = groups.filter(group => 
-        groupIdsSet.has(group.id) && group.base_city_id === selectedBase
-      );
+      // CORRIGIDO: Mostrar TODOS os grupos da base, não apenas os que já têm preços
+      const allBaseGroups = groups.filter(group => group.base_city_id === selectedBase);
+      
+      // Marcar quais grupos têm preços salvos (para referência)
+      const groupsWithPrices = allBaseGroups.map(group => ({
+        ...group,
+        hasExistingPrices: groupIdsSet.has(group.id)
+      }));
 
-      setAvailableGroups(availableGroupsList);
+      setAvailableGroups(groupsWithPrices);
     } catch (err) {
       console.error('Erro ao carregar grupos disponíveis:', err);
       setAvailableGroups([]);

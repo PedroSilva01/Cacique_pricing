@@ -914,15 +914,6 @@ const PriceEntry = () => {
         }
       });
 
-      // SOLUÇÃO FINAL: Registros individuais por grupo (após remoção da constraint)
-      console.log('🎯 SALVANDO PREÇOS - Registros individuais por grupo:', {
-        groups: selectedGroups,
-        supplier: selectedSupplier,
-        base: selectedBase,
-        date,
-        operation: 'INDIVIDUAL_RECORDS_PER_GROUP'
-      });
-
       // 1. Deletar apenas registros dos grupos que estão sendo atualizados
       for (const groupId of selectedGroups) {
         const { error: deleteError } = await supabase

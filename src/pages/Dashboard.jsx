@@ -527,6 +527,7 @@ const Dashboard = () => {
             .filter(Boolean)
             .sort((a, b) => a.finalPrice - b.finalPrice);
 
+
         return results;
     }, [selectedFuel, selectedDestination, suppliers, selectedGroup, selectedBase, dailyPrices, freightRoutes, baseCities, groups, selectedVehicleType, settings]);
 

@@ -37,7 +37,15 @@ const BestCostAnalysis = ({
     if (groupPostos.length === 0) return null;
 
     // Para cada base, calcular os custos médios
-    const baseAnalysis = baseCities.map(base => {
+    // CORRIGIDO: Filtrar apenas bases compatíveis com os postos do grupo
+    const compatibleBases = baseCities.filter(base => {
+      // Verificar se algum posto do grupo pode ser abastecido por esta base
+      return groupPostos.some(posto => 
+        (posto.allowed_supply_cities || []).includes(base.id)
+      );
+    });
+    
+    const baseAnalysis = compatibleBases.map(base => {
       const costsPerPosto = groupPostos.map(posto => {
         const postoBandeira = posto.bandeira || 'bandeira_branca';
         
@@ -47,27 +55,42 @@ const BestCostAnalysis = ({
           if (selectedDate && dp.date !== selectedDate) {
             return false;
           }
-          return dp.base_city_id === base.id &&
-            dp.group_ids?.includes(selectedGroup) &&
-            dp.prices?.[selectedFuel];
+          
+          // Verificar se o preço é da base correta e tem o combustível
+          if (dp.base_city_id !== base.id || !dp.prices?.[selectedFuel]) {
+            return false;
+          }
+          
+          // CORRIGIDO: Usar mesma lógica flexível do Dashboard principal
+          // Não filtrar por group_ids específicos - deixar essa validação para os filtros posteriores
+          
+          return true;
         });
 
         if (basePrices.length === 0) return null;
 
-        // Calcular custo por fornecedor (preço + frete)
-        const supplierCosts = basePrices.map(priceRecord => {
+        // CORRIGIDO: Filtrar preços apenas de fornecedores permitidos pelo grupo
+        const compatiblePrices = basePrices.filter(priceRecord => {
           const supplier = suppliers.find(s => s.id === priceRecord.supplier_id);
+          if (!supplier) return false;
           
-          // FILTRO DE BANDEIRA: Verificar compatibilidade
-          if (supplier) {
-            const supplierBandeira = supplier.bandeira || 'bandeira_branca';
-            // Se posto é bandeirado, só aceita fornecedor da mesma bandeira (NÃO aceita bandeira_branca)
-            if (postoBandeira !== 'bandeira_branca') {
-              if (supplierBandeira !== postoBandeira) {
-                return null; // Fornecedor incompatível
-              }
-            }
-          }
+          // LÓGICA CORRETA: Usar lista de "Fornecedores Permitidos" do grupo
+          const group = groups.find(g => g.id === selectedGroup);
+          
+          
+          // Verificar se fornecedor está na lista de permitidos do grupo
+          // CORRIGIDO: Usar allowed_supplier_ids (campo correto com 40 fornecedores)
+          const allowedSuppliers = group?.allowed_supplier_ids || [];
+          const isCompatible = allowedSuppliers.includes(supplier.id);
+          
+          
+          return isCompatible;
+        });
+        
+        // Calcular custo por fornecedor (preço + frete)
+        const supplierCosts = compatiblePrices.map(priceRecord => {
+          const supplier = suppliers.find(s => s.id === priceRecord.supplier_id);
+          if (!supplier) return null; // Segurança adicional
           
           const basePrice = priceRecord.prices[selectedFuel];
 

@@ -2,9 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { DollarSign, Save, RefreshCw, Building, MapPin, Edit3, Check, X, AlertTriangle, Download, FileImage, FileText } from 'lucide-react';
 import { supabase } from '@/lib/customSupabaseClient';
+import { priceCacheService } from '@/lib/priceCacheService';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { useToast } from '@/components/ui/use-toast';
 import { showErrorToast } from '@/lib/utils';
+import { defaultSettings } from '@/lib/mockData';
+import { cacheManager } from '@/lib/cacheManager';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -18,7 +21,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { DatePicker } from '@/components/ui/date-picker';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
-import { defaultSettings } from '@/lib/mockData';
 import { useMemo } from 'react';
 
 const GroupPrices = () => {
@@ -121,41 +123,41 @@ const GroupPrices = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [groupsRes, postosRes, suppliersRes, basesRes, settingsRes] = await Promise.all([
-        supabase.from('groups').select('*').eq('user_id', userId),
-        supabase.from('postos').select('*, cities(*)').eq('user_id', userId),
-        supabase.from('suppliers').select('*').eq('user_id', userId),
-        supabase.from('base_cities').select('*').eq('user_id', userId),
-        supabase.from('user_settings').select('settings').eq('user_id', userId).single()
-      ]);
-
-      if (groupsRes.error) throw groupsRes.error;
-      if (postosRes.error) throw postosRes.error;
-      if (suppliersRes.error) throw suppliersRes.error;
-      if (basesRes.error) throw basesRes.error;
-      if (settingsRes.error && settingsRes.error.code !== 'PGRST116') throw settingsRes.error;
-
-      setGroups(groupsRes.data || []);
-      setPostos(postosRes.data || []);
-      setSuppliers(suppliersRes.data || []);
-      setBaseCities(basesRes.data || []);
-
-      const rawSettings = settingsRes.data?.settings || {};
-      const mergedSettings = {
-        ...defaultSettings,
-        ...rawSettings,
-        vehicleTypes: {
-          ...(defaultSettings.vehicleTypes || {}),
-          ...(rawSettings.vehicleTypes || {}),
-        },
-        fuelTypes: {
-          // CORRIGIDO: Primeiro defaultSettings, depois rawSettings para permitir sobrescrita
-          ...(defaultSettings.fuelTypes || {}),
-          ...(rawSettings.fuelTypes || {}),
-        },
-      };
-
-      setSettings(mergedSettings);
+      console.log(' GroupPrices: Carregando dados com cache otimizado...');
+      
+      // Usar cacheManager para carregar configurações básicas
+      const configResult = await cacheManager.getUserConfigData(userId);
+      
+      if (configResult.error) {
+        throw configResult.error;
+      }
+      
+      const { data } = configResult;
+      
+      // Aplicar dados aos states
+      setGroups(data.groups || []);
+      setPostos(data.postos || []);
+      setSuppliers(data.suppliers || []);
+      setBaseCities(data.baseCities || []);
+      setSettings(data.settings || {});
+      
+      // Log das fontes de cache
+      console.log(' GroupPrices dados carregados:', {
+        groups: data.groups?.length || 0,
+        postos: data.postos?.length || 0,
+        suppliers: data.suppliers?.length || 0,
+        baseCities: data.baseCities?.length || 0,
+        source: data.source
+      });
+      
+      // Toast informativo sobre cache
+      if (data.source === 'cache') {
+        toast({
+          title: ' Cache Hit!',
+          description: 'Dados carregados instantaneamente do Redis',
+          duration: 2000
+        });
+      }
     } catch (err) {
       console.error('Erro ao carregar dados:', err);
       showErrorToast(toast, { title: 'Erro ao carregar dados', error: err });
@@ -173,7 +175,6 @@ const GroupPrices = () => {
   const loadGroupPrices = async () => {
     if (!selectedGroup || !selectedDate) return;
 
-
     const group = groups.find(g => g.id === selectedGroup);
     if (!group) return;
 
@@ -183,43 +184,41 @@ const GroupPrices = () => {
     // Load target prices from group
     setTargetPrices(group.target_prices || {});
 
-    // Carregar preços do dia para todos os postos do grupo
+    // Carregar preços do dia para todos os postos do grupo usando Redis cache
     try {
+      console.log('🔍 Loading group prices with Redis cache...');
 
       const [pricesRes, stationPricesRes] = await Promise.all([
-        (() => {
-          let query = supabase
-            .from('daily_prices')
-            .select('*, suppliers(name)')
-            .eq('user_id', userId)
-            .eq('date', selectedDate)
-            .contains('group_ids', [selectedGroup]);
-          
-          // CORRIGIDO: Filtrar por base quando selecionada
-          if (selectedBase) {
-            query = query.eq('base_city_id', selectedBase);
-          }
-          
-          return query;
-        })(),
-        supabase
-          .from('station_prices')
-          .select('*')
-          .eq('user_id', userId)
-          .eq('date', selectedDate)
-          .in('station_id', groupPostos.map(p => p.id))
+        // Use cache service for daily prices
+        priceCacheService.getDailyPrices({
+          date: selectedDate,
+          userId,
+          groupIds: [selectedGroup],
+          baseId: selectedBase,
+          supplierId: selectedSupplier,
+          useCache: true
+        }),
+        // Use cache service for station prices
+        priceCacheService.getStationPrices(
+          selectedDate,
+          userId,
+          groupPostos.map(p => p.id),
+          true // useCache
+        )
       ]);
 
-      console.log('🔍 DEBUG GroupPrices - Resultados das queries:', {
+      console.log('🔍 DEBUG GroupPrices - Resultados das queries com Redis:', {
         pricesRes: {
           data: pricesRes.data,
           error: pricesRes.error,
-          count: pricesRes.data?.length || 0
+          count: pricesRes.data?.length || 0,
+          source: pricesRes.source
         },
         stationPricesRes: {
           data: stationPricesRes.data,
           error: stationPricesRes.error,
-          count: stationPricesRes.data?.length || 0
+          count: stationPricesRes.data?.length || 0,
+          source: stationPricesRes.source
         }
       });
 
@@ -387,6 +386,8 @@ const GroupPrices = () => {
 
     setSaving(true);
     try {
+      console.log('💾 Saving station prices with Redis cache...');
+      
       // Salvar preços editados como station_prices para cada posto
       const stationPricesUpdates = [];
       
@@ -402,27 +403,17 @@ const GroupPrices = () => {
       });
 
       if (stationPricesUpdates.length > 0) {
-        // Primeiro, deletar registros existentes para esta data e postos
-        const { error: deleteError } = await supabase
-          .from('station_prices')
-          .delete()
-          .eq('user_id', userId)
-          .eq('date', selectedDate)
-          .in('station_id', Object.keys(editingPrices));
-
-        if (deleteError) throw deleteError;
-
-        // Depois, inserir novos registros
-        const { error: insertError } = await supabase
-          .from('station_prices')
-          .insert(stationPricesUpdates);
-
-        if (insertError) throw insertError;
+        // Use cache service to save station prices (handles both Supabase + Redis)
+        const { data, error } = await priceCacheService.saveStationPrices(stationPricesUpdates);
+        
+        if (error) throw error;
+        
+        console.log('✅ Station prices saved with Redis cache');
       }
 
       toast({
         title: '✅ Preços salvos!',
-        description: `Preços individuais salvos para ${stationPricesUpdates.length} posto(s).`
+        description: `Preços individuais salvos para ${stationPricesUpdates.length} posto(s) com cache Redis.`
       });
 
       // Recarregar dados para refletir mudanças
@@ -757,7 +748,7 @@ const GroupPrices = () => {
                 {getAvailableFuelsForGroup().map(fuel => (
                   <div key={fuel}>
                     <Label htmlFor={`target-${fuel}`}>
-                      {settings.fuelTypes[fuel]?.name || fuel}
+                      {settings.fuelTypes[fuel]?.name || defaultSettings.fuelTypes?.[fuel]?.name || fuel}
                     </Label>
                     <Input
                       id={`target-${fuel}`}
@@ -857,7 +848,7 @@ const GroupPrices = () => {
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                       {Object.keys(settings.fuelTypes || {}).map(fuel => (
                         <div key={fuel}>
-                          <Label className="text-xs">{settings.fuelTypes[fuel].name}</Label>
+                          <Label className="text-xs">{settings.fuelTypes[fuel]?.name || defaultSettings.fuelTypes?.[fuel]?.name || fuel}</Label>
                           <Input
                             type="number"
                             step="0.0001"
@@ -951,7 +942,7 @@ const GroupPrices = () => {
                           <TableCell className="font-medium py-4">
                             <div className="space-y-3">
                               <div className="font-semibold text-base text-slate-900 dark:text-slate-100">
-                                {settings.fuelTypes[fuel]?.name || fuel}
+                                {settings.fuelTypes[fuel]?.name || defaultSettings.fuelTypes?.[fuel]?.name || fuel}
                               </div>
                               {groupData?.bandeira === 'bandeira_branca' && fuelComparison && (
                                 <div className="space-y-2 pl-4 border-l-2 border-slate-300 dark:border-slate-600">

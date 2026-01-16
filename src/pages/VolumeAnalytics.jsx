@@ -5,6 +5,8 @@ import { supabase } from '@/lib/customSupabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { useToast } from '@/components/ui/use-toast';
 import { showErrorToast } from '@/lib/utils';
+import { defaultSettings } from '@/lib/mockData';
+import { cacheManager } from '@/lib/cacheManager';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -47,8 +49,6 @@ const VolumeAnalytics = () => {
   const [selectedPeriod, setSelectedPeriod] = useState('month');
   const [selectedDimension, setSelectedDimension] = useState('brand');
   const [selectedEntity, setSelectedEntity] = useState('all');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
 
   // Aggregated data
   const [volumeMetrics, setVolumeMetrics] = useState({});
@@ -64,7 +64,6 @@ const VolumeAnalytics = () => {
 
   useEffect(() => {
     if (!userId) return;
-    setDateDefaults();
     fetchData();
   }, [userId]);
 
@@ -72,38 +71,47 @@ const VolumeAnalytics = () => {
     if (data.length > 0) {
       processData();
     }
-  }, [data, selectedPeriod, selectedDimension, selectedEntity, startDate, endDate]);
-
-  const setDateDefaults = () => {
-    const today = new Date();
-    const lastYear = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate());
-    setStartDate(lastYear.toISOString().split('T')[0]);
-    setEndDate(today.toISOString().split('T')[0]);
-  };
+  }, [data, selectedPeriod, selectedDimension, selectedEntity]);
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      // CORRIGIDO: Usar mesma query do Financial Dashboard (sem joins desnecessários)
-      const [ordersRes, groupsRes, postosRes, suppliersRes, settingsRes] = await Promise.all([
-        supabase.from('purchase_orders').select('*').eq('user_id', userId),
-        supabase.from('groups').select('*').eq('user_id', userId),
-        supabase.from('postos').select('*').eq('user_id', userId),
-        supabase.from('suppliers').select('*').eq('user_id', userId),
-        supabase.from('user_settings').select('*').eq('user_id', userId).single()
-      ]);
-
-      if (ordersRes.error) throw ordersRes.error;
-      if (groupsRes.error) throw groupsRes.error;
-      if (postosRes.error) throw postosRes.error;
-      if (suppliersRes.error) throw suppliersRes.error;
-      if (settingsRes.error && settingsRes.error.code !== 'PGRST116') throw settingsRes.error;
-
-      setData(ordersRes.data || []);
-      setGroups(groupsRes.data || []);
-      setPostos(postosRes.data || []);
-      setSuppliers(suppliersRes.data || []);
-      setSettings(settingsRes.data?.settings || {});
+      console.log('🚀 VolumeAnalytics: Carregando dados com cache otimizado...');
+      
+      // Usar cacheManager para carregar todos os dados otimizados
+      const result = await cacheManager.getAllUserData(userId);
+      
+      if (result.error) {
+        throw result.error;
+      }
+      
+      const { data } = result;
+      
+      // Aplicar dados aos states
+      setData(data.purchaseOrders || []);
+      setGroups(data.groups || []);
+      setPostos(data.postos || []);
+      setSuppliers(data.suppliers || []);
+      setSettings(data.settings || {});
+      
+      // Log das fontes de cache
+      console.log('✅ VolumeAnalytics dados carregados:', {
+        orders: data.purchaseOrders?.length || 0,
+        groups: data.groups?.length || 0,
+        postos: data.postos?.length || 0,
+        suppliers: data.suppliers?.length || 0,
+        sources: data.sources
+      });
+      
+      // Toast informativo sobre cache
+      if (data.sources.orders === 'cache' && data.sources.config === 'cache') {
+        toast({
+          title: '⚡ Cache Hit!',
+          description: 'Dados carregados instantaneamente do cache Redis',
+          duration: 2000
+        });
+      }
+      
     } catch (err) {
       console.error('Erro ao carregar dados:', err);
       showErrorToast(toast, { title: 'Erro ao carregar dados', error: err });
@@ -202,14 +210,8 @@ const VolumeAnalytics = () => {
       'bandeira_branca': 0.00535
     };
 
-    // CORRIGIDO: Aplicar filtros de data primeiro, igual ao Financial Dashboard
-    let filteredData = data.filter(order => {
-      const orderDate = new Date(order.order_date);
-      const start = startDate ? new Date(startDate) : new Date('2020-01-01');
-      const end = endDate ? new Date(endDate) : new Date();
-      
-      return orderDate >= start && orderDate <= end;
-    });
+    // CORRIGIDO: Usar todos os dados disponíveis (sem filtros de data específicos)
+    let filteredData = data;
 
     // Depois filtrar por entidade selecionada
     filteredData = selectedEntity === 'all' 
@@ -353,7 +355,7 @@ const VolumeAnalytics = () => {
     const pricesByMonth = {};
     filteredData.forEach(order => {
       const month = order.order_date.substring(0, 7); // YYYY-MM
-      const price = order.volume > 0 ? (order.total_cost / (order.volume * 1000)) : 0;
+      const price = order.volume > 0 ? (order.unit_price || 0) : 0;
       
       if (!pricesByMonth[month]) {
         pricesByMonth[month] = { prices: [], volume: 0 };
@@ -400,12 +402,12 @@ const VolumeAnalytics = () => {
     setMonthlyComparison(monthlyPrices);
 
     // 2. Insights de economia
-    const avgPrice = totals.volume > 0 ? totals.totalCost / (totals.volume * 1000) : 0;
-    const bestPrice = Math.min(...filteredData.filter(o => o.volume > 0).map(o => o.total_cost / (o.volume * 1000)));
-    const worstPrice = Math.max(...filteredData.filter(o => o.volume > 0).map(o => o.total_cost / (o.volume * 1000)));
+    const avgPrice = totals.volume > 0 ? totals.totalCost / totals.volume : 0;
+    const bestPrice = Math.min(...filteredData.filter(o => o.volume > 0).map(o => o.unit_price || 0));
+    const worstPrice = Math.max(...filteredData.filter(o => o.volume > 0).map(o => o.unit_price || 0));
     
-    const potentialSavings = totals.volume * 1000 * (avgPrice - bestPrice);
-    const avoidedLosses = totals.volume * 1000 * (worstPrice - avgPrice);
+    const potentialSavings = totals.volume * (avgPrice - bestPrice);
+    const avoidedLosses = totals.volume * (worstPrice - avgPrice);
 
     setEconomyInsights({
       avgPrice,
@@ -453,8 +455,9 @@ const VolumeAnalytics = () => {
     // Alerta de concentração de fornecedor
     const supplierConcentration = {};
     filteredData.forEach(order => {
-      const supplier = order.suppliers?.name || 'N/A';
-      supplierConcentration[supplier] = (supplierConcentration[supplier] || 0) + (order.volume || 0);
+      const supplier = suppliers.find(s => s.id === order.supplier_id);
+      const supplierName = supplier?.name || 'Fornecedor não identificado';
+      supplierConcentration[supplierName] = (supplierConcentration[supplierName] || 0) + (order.volume || 0);
     });
     
     const topSupplierVolume = Math.max(...Object.values(supplierConcentration));
@@ -484,7 +487,7 @@ const VolumeAnalytics = () => {
         selectedEntity === 'all' ? 'Todos' : getEntityName(selectedEntity),
         row.volume,
         row.avgPrice,
-        row.totalCost || row.volume * row.avgPrice * 1000,
+        row.totalCost || row.volume * row.avgPrice,
         row.orders
       ])
     ].map(row => row.join(',')).join('\n');
@@ -554,7 +557,7 @@ const VolumeAnalytics = () => {
           </CardTitle>
         </CardHeader>
         <CardContent className="pt-6">
-          <div className="grid md:grid-cols-5 gap-4">
+          <div className="grid md:grid-cols-3 gap-4">
             <div>
               <Label className="font-semibold text-slate-700 dark:text-slate-300">Período</Label>
               <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
@@ -594,7 +597,7 @@ const VolumeAnalytics = () => {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Todos</SelectItem>
-                  {selectedDimension === 'brand' && ['bandeira_branca', 'petrobras', 'shell', 'vibra', 'raizen', 'ipianga'].map(brand => (
+                  {selectedDimension === 'brand' && ['bandeira_branca', 'petrobras', 'shell', 'vibra', 'raizen', 'ipiranga'].map(brand => (
                     <SelectItem key={brand} value={brand}>
                       <div className="flex items-center gap-2">
                         <BrandBadge bandeira={brand} size="xs" />
@@ -613,52 +616,6 @@ const VolumeAnalytics = () => {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-
-            <div>
-              <Label className="font-semibold text-slate-700 dark:text-slate-300">Data Início</Label>
-              <DatePicker
-                value={startDate}
-                onChange={(newDate) => {
-                  setStartDate(newDate);
-                  // Trigger data reload
-                  setTimeout(() => {
-                    if (newDate && endDate) fetchData();
-                  }, 100);
-                }}
-                className="mt-1.5 w-full"
-              />
-            </div>
-
-            <div>
-              <Label className="font-semibold text-slate-700 dark:text-slate-300">Data Fim</Label>
-              <DatePicker
-                value={endDate}
-                onChange={(newDate) => {
-                  setEndDate(newDate);
-                  // Trigger data reload
-                  setTimeout(() => {
-                    if (startDate && newDate) fetchData();
-                  }, 100);
-                }}
-                className="mt-1.5 w-full"
-              />
-            </div>
-
-            <div className="flex items-end">
-              <Button
-                onClick={fetchData}
-                variant="outline"
-                className="border-2 border-blue-300 text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-400 dark:hover:bg-blue-950/20 font-semibold shadow-md hover:shadow-lg transition-all rounded-xl h-12"
-                disabled={loading}
-              >
-                {loading ? (
-                  <RefreshCw className="w-4 h-4 animate-spin mr-2" />
-                ) : (
-                  <RefreshCw className="w-4 h-4 mr-2" />
-                )}
-                🔄 Atualizar
-              </Button>
             </div>
           </div>
         </CardContent>
@@ -836,8 +793,9 @@ const VolumeAnalytics = () => {
               <p className="text-2xl font-bold text-green-600 font-mono">
                 R$ {(economyInsights.potentialSavings || 0).toLocaleString('pt-BR', { maximumFractionDigits: 0 })}
               </p>
-              <p className="text-xs text-slate-500 dark:text-slate-500">
-                Usando sempre o melhor preço
+              <p className="text-xs text-slate-500 dark:text-slate-500 leading-relaxed">
+                💡 Economia se você sempre comprasse pelo melhor preço encontrado no período.<br/>
+                Cálculo: Volume Total × (Preço Médio Atual - Melhor Preço)
               </p>
             </div>
             <div className="text-center p-4 bg-white/50 dark:bg-slate-800/50 rounded-xl">
@@ -845,15 +803,21 @@ const VolumeAnalytics = () => {
               <p className="text-2xl font-bold text-emerald-600 font-mono">
                 R$ {(economyInsights.avoidedLosses || 0).toLocaleString('pt-BR', { maximumFractionDigits: 0 })}
               </p>
-              <p className="text-xs text-slate-500 dark:text-slate-500">
-                Vs. pior cenário
+              <p className="text-xs text-slate-500 dark:text-slate-500 leading-relaxed">
+                🛡️ Valor que você EVITOU perder comprando melhor que o pior preço do período.<br/>
+                Cálculo: Volume Total × (Pior Preço - Preço Médio Atual)
               </p>
             </div>
-            <div className="flex justify-between items-center p-3 bg-white/50 dark:bg-slate-800/50 rounded-xl">
-              <span className="font-semibold text-slate-700 dark:text-slate-300">Spread:</span>
-              <span className="font-bold text-lg text-amber-600 font-mono">
-                R$ {((economyInsights.priceSpread || 0) * 1000).toFixed(2)}/m³
-              </span>
+            <div className="p-3 bg-white/50 dark:bg-slate-800/50 rounded-xl">
+              <div className="flex justify-between items-center mb-2">
+                <span className="font-semibold text-slate-700 dark:text-slate-300">Spread:</span>
+                <span className="font-bold text-lg text-amber-600 font-mono">
+                  R$ {(economyInsights.priceSpread || 0).toFixed(4)}/L
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-500">
+                📊 Diferença entre o maior e menor preço do período (Volatilidade)
+              </p>
             </div>
           </CardContent>
         </Card>
@@ -867,32 +831,47 @@ const VolumeAnalytics = () => {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-6 space-y-4">
-            <div className="flex justify-between items-center p-3 bg-white/50 dark:bg-slate-800/50 rounded-xl">
-              <span className="font-semibold text-slate-700 dark:text-slate-300">Volume/Pedido:</span>
-              <span className="font-bold text-lg text-blue-600 font-mono">
-                {volumeMetrics.totalOrders > 0 
-                  ? (volumeMetrics.totalVolume / volumeMetrics.totalOrders).toFixed(1)
-                  : '0'
-                } m³
-              </span>
+            <div className="p-3 bg-white/50 dark:bg-slate-800/50 rounded-xl">
+              <div className="flex justify-between items-center mb-2">
+                <span className="font-semibold text-slate-700 dark:text-slate-300">Volume/Pedido:</span>
+                <span className="font-bold text-lg text-blue-600 font-mono">
+                  {volumeMetrics.totalOrders > 0 
+                    ? (volumeMetrics.totalVolume / volumeMetrics.totalOrders).toFixed(1)
+                    : '0'
+                  } m³
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-500">
+                🚚 Média de volume por pedido (eficiência logística)
+              </p>
             </div>
-            <div className="flex justify-between items-center p-3 bg-white/50 dark:bg-slate-800/50 rounded-xl">
-              <span className="font-semibold text-slate-700 dark:text-slate-300">Custo/m³:</span>
-              <span className="font-bold text-lg text-indigo-600 font-mono">
-                R$ {volumeMetrics.totalVolume > 0 
-                  ? (volumeMetrics.totalCost / volumeMetrics.totalVolume).toFixed(0)
-                  : '0'
-                }
-              </span>
+            <div className="p-3 bg-white/50 dark:bg-slate-800/50 rounded-xl">
+              <div className="flex justify-between items-center mb-2">
+                <span className="font-semibold text-slate-700 dark:text-slate-300">Custo/m³:</span>
+                <span className="font-bold text-lg text-indigo-600 font-mono">
+                  R$ {volumeMetrics.totalVolume > 0 
+                    ? (volumeMetrics.totalCost / volumeMetrics.totalVolume).toFixed(0)
+                    : '0'
+                  }
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-500">
+                💰 Custo médio por metro cúbico de combustível
+              </p>
             </div>
-            <div className="flex justify-between items-center p-3 bg-white/50 dark:bg-slate-800/50 rounded-xl">
-              <span className="font-semibold text-slate-700 dark:text-slate-300">% Financeiro:</span>
-              <span className="font-bold text-lg text-purple-600 font-mono">
-                {volumeMetrics.totalCost > 0 
-                  ? ((volumeMetrics.totalFinancialCost / volumeMetrics.totalCost) * 100).toFixed(1)
-                  : '0'
-                }%
-              </span>
+            <div className="p-3 bg-white/50 dark:bg-slate-800/50 rounded-xl">
+              <div className="flex justify-between items-center mb-2">
+                <span className="font-semibold text-slate-700 dark:text-slate-300">% Financeiro:</span>
+                <span className="font-bold text-lg text-purple-600 font-mono">
+                  {volumeMetrics.totalCost > 0 
+                    ? ((volumeMetrics.totalFinancialCost / volumeMetrics.totalCost) * 100).toFixed(1)
+                    : '0'
+                  }%
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-500">
+                📊 Percentual do custo total gasto com juros de financiamento
+              </p>
             </div>
           </CardContent>
         </Card>
@@ -1064,7 +1043,7 @@ const VolumeAnalytics = () => {
                         <div className="flex justify-between items-center p-2 bg-white/50 dark:bg-slate-800/50 rounded-lg">
                           <span className="font-semibold text-slate-700 dark:text-slate-300">Volatilidade:</span>
                           <span className="font-bold text-amber-600 font-mono">
-                            {((Math.max(...monthlyComparison.map(m => m.avgPrice)) - Math.min(...monthlyComparison.map(m => m.avgPrice))) * 1000).toFixed(2)} R$/m³
+                            R$ {(Math.max(...monthlyComparison.map(m => m.avgPrice)) - Math.min(...monthlyComparison.map(m => m.avgPrice))).toFixed(4)}/L
                           </span>
                         </div>
                       </CardContent>
@@ -1163,7 +1142,7 @@ const VolumeAnalytics = () => {
                         R$ {entity.avgPrice.toFixed(4)}
                       </TableCell>
                       <TableCell className="text-right font-mono">
-                        R$ {(entity.volume * entity.avgPrice * 1000).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        R$ {(entity.volume * entity.avgPrice).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                       </TableCell>
                       <TableCell className="text-right">
                         {entity.share}%

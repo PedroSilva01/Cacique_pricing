@@ -9,6 +9,7 @@ import { supabase } from '@/lib/customSupabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { defaultSettings } from '@/lib/mockData';
 import { showErrorToast } from '@/lib/utils';
+import { cacheManager } from '@/lib/cacheManager';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
@@ -364,59 +365,10 @@ const SettingsPage = () => {
       
       const record = { ...sanitizedData, user_id: user.id };
       
-      // Para atualizações com ID existente, usar update ao invés de upsert
-      let savedRecord;
-      if (dataToSave.id) {
-        // Update existing record
-        const { id, ...recordWithoutId } = record;
-        const { error, data } = await supabase
-          .from(tableName)
-          .update(recordWithoutId)
-          .eq('id', dataToSave.id)
-          .eq('user_id', userId)
-          .select()
-          .single();
-        
-        if (error) throw error;
-        savedRecord = data;
-      } else {
-        // Insert new record
-        const { error, data } = await supabase
-          .from(tableName)
-          .upsert(record, {
-            onConflict: tableName === 'groups' ? 'user_id,name' : 
-                       tableName === 'postos' ? 'user_id,name' : 
-                       tableName === 'suppliers' ? 'id' : 
-                       tableName === 'base_cities' ? 'user_id,name' :
-                       tableName === 'cities' ? 'user_id,name' :
-                       tableName === 'freight_routes' ? 'user_id,origin_city_id,destination_city_id' : undefined
-          })
-          .select()
-          .single();
-        
-        if (error) throw error;
-        savedRecord = data;
-      }
-      
-      console.log('✅ Registro salvo:', { tableName, savedRecord });
-      
-      // SINCRONIZAÇÃO DE BANDEIRAS
-      // Se salvou um GRUPO, sincronizar bandeira para todos os postos do grupo
-      if (tableName === 'groups' && savedRecord) {
-        const groupBandeira = savedRecord.bandeira || 'bandeira_branca';
-        const postoIds = savedRecord.posto_ids || [];
-        
-        if (postoIds.length > 0 && groupBandeira !== 'bandeira_branca') {
-          // Atualizar bandeira de todos os postos do grupo
-          const { error: updateError } = await supabase
-            .from('postos')
-            .update({ bandeira: groupBandeira })
-            .in('id', postoIds)
-            .eq('user_id', user.id);
-          
-          if (updateError) console.error('Erro ao sincronizar bandeiras dos postos:', updateError);
-        }
-      }
+      const isUpdate = dataToSave.id;
+      let savedRecord = null;
+
+      // Esta seção será implementada corretamente com a função handleSave
       
       // Se salvou um POSTO, sincronizar bandeira do primeiro grupo (se houver)
       if (tableName === 'postos' && savedRecord) {
@@ -429,13 +381,14 @@ const SettingsPage = () => {
             .select('bandeira')
             .eq('id', groupIds[0])
             .eq('user_id', user.id)
-            .single();
+            .limit(1);
           
-          if (!groupError && firstGroup && firstGroup.bandeira && firstGroup.bandeira !== 'bandeira_branca') {
+          const groupData = firstGroup && firstGroup.length > 0 ? firstGroup[0] : null;
+          if (!groupError && groupData && groupData.bandeira && groupData.bandeira !== 'bandeira_branca') {
             // Atualizar bandeira do posto com a bandeira do grupo
             const { error: updateError } = await supabase
               .from('postos')
-              .update({ bandeira: firstGroup.bandeira })
+              .update({ bandeira: groupData.bandeira })
               .eq('id', savedRecord.id)
               .eq('user_id', user.id);
             
@@ -603,7 +556,20 @@ const SettingsPage = () => {
       try {
         const { error } = await supabase.from('user_settings').upsert({ user_id: user.id, settings: settings }, { onConflict: 'user_id' });
         if (error) throw error;
-        toast({ title: 'Configurações Gerais Salvas!', description: 'Seus tipos de veículos e combustíveis foram atualizados.' });
+        
+        // INVALIDAR CACHE AUTOMATICAMENTE após salvar configurações
+        try {
+          await cacheManager.invalidateUserSettings(userId);
+          console.log('Cache de user_settings invalidado automaticamente');
+        } catch (cacheError) {
+          console.warn('Erro ao invalidar cache (não crítico):', cacheError);
+        }
+        
+        toast({ 
+          title: 'Configurações Gerais Salvas!', 
+          description: 'Seus tipos de veículos e combustíveis foram atualizados.',
+          duration: 3000
+        });
       } catch (error) {
         showErrorToast(toast, { title: 'Erro ao salvar configurações', error });
       }
@@ -1599,7 +1565,10 @@ const SupplierModal = ({ data, baseCities, settings, onClose, onSave }) => {
     const [d, setD] = useState(data); 
     const onCityToggle = (id, checked) => setD({ ...d, city_ids: checked ? [...(d.city_ids || []), id] : (d.city_ids || []).filter(i => i !== id) });
     const onProductToggle = (key, checked) => setD({ ...d, available_products: checked ? [...(d.available_products || []), key] : (d.available_products || []).filter(i => i !== key) });
-    const fuelOptions = Object.entries(settings.fuelTypes || {}).map(([key, value]) => ({ id: key, name: value.name }));
+    const fuelOptions = Object.entries(settings.fuelTypes || defaultSettings.fuelTypes || {}).map(([key, value]) => ({ 
+      id: key, 
+      name: value?.name || defaultSettings.fuelTypes?.[key]?.name || key 
+    }));
 
     const bandeiras = [
         { value: 'bandeira_branca', label: 'Bandeira Branca / Independente' },

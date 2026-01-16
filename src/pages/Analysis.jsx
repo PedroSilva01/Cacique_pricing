@@ -13,6 +13,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { showErrorToast } from '@/lib/utils';
 import { computePearsonCorrelation } from '@/lib/analytics';
 import { useDashboardData } from '@/hooks/useDashboardData';
+import { defaultSettings } from '@/lib/mockData';
 
 const COLORS = ['#3b82f6', '#10b981', '#ef4444', '#f97316', '#8b5cf6', '#ec4899', '#64748b', '#f59e0b', '#34d399', '#a78bfa'];
 
@@ -449,7 +450,7 @@ const Analysis = () => {
       const pricesByDate = filteredFuelData.reduce((acc, item) => {
           const date = new Date(item.date).toLocaleDateString('pt-BR', { timeZone: 'UTC' });
           const supplierName = supplierMap.get(item.supplier_id);
-          const fuelName = fuelTypes[item.fuel_type]?.name || item.fuel_type;
+          const fuelName = fuelTypes[item.fuel_type]?.name || defaultSettings.fuelTypes?.[item.fuel_type]?.name || item.fuel_type;
           
           if (!supplierName) return acc;
           
@@ -559,7 +560,7 @@ const Analysis = () => {
       const supplierName = supplierMap.get(item.supplier_id);
       if (!supplierName) return;
 
-      const fuelName = fuelTypes[item.fuel_type]?.name || item.fuel_type;
+      const fuelName = fuelTypes[item.fuel_type]?.name || defaultSettings.fuelTypes?.[item.fuel_type]?.name || item.fuel_type;
       const key = `${supplierName} - ${fuelName}`;
       const price = Number(item.price);
       if (!Number.isFinite(price)) return;

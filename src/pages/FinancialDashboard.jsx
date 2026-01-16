@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/lib/customSupabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
+import { cacheManager } from '@/lib/cacheManager';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -12,6 +13,7 @@ import { Download, TrendingUp, TrendingDown, DollarSign, Truck, Filter, BarChart
 import Pagination from '@/components/ui/pagination';
 import { useToast } from '@/components/ui/use-toast';
 import { motion } from 'framer-motion';
+import { defaultSettings } from '@/lib/mockData';
 
 export default function FinancialDashboard() {
   const { user } = useAuth();
@@ -185,18 +187,11 @@ export default function FinancialDashboard() {
             
             if (!group || !group.reference_posto_id) continue;
             
-            // Buscar preço do posto de referência para o mesmo combustível
-            const { data: refPriceData, error: refPriceError } = await supabase
-              .from('daily_prices')
-              .select('prices')
-              .eq('date', dateStr)
-              .contains('group_ids', [groupId])
-              .single();
+            // CORRIGIDO: Verificar se há preço alvo definido no grupo para este combustível
+            if (!group.target_prices) continue;
             
-            if (refPriceError || !refPriceData?.prices) continue;
-            
-            const referencePrice = refPriceData.prices[order.fuel_type];
-            if (!referencePrice) continue;
+            const referencePrice = group.target_prices[order.fuel_type];
+            if (!referencePrice) continue; // Só gerar alerta se houver preço alvo definido
             
             // Calcular desvio
             const priceDifference = order.unit_price - referencePrice;
@@ -209,7 +204,7 @@ export default function FinancialDashboard() {
                 postoName: order.postos.name,
                 groupName: group.name,
                 fuelType: order.fuel_type,
-                fuelTypeName: settings.fuelTypes?.[order.fuel_type]?.name || order.fuel_type,
+                fuelTypeName: settings.fuelTypes?.[order.fuel_type]?.name || defaultSettings.fuelTypes?.[order.fuel_type]?.name || order.fuel_type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
                 unitPrice: order.unit_price,
                 referencePrice: referencePrice,
                 priceDifference: priceDifference,
@@ -266,19 +261,42 @@ export default function FinancialDashboard() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [ordersRes, postosRes, groupsRes, suppliersRes, settingsRes] = await Promise.all([
-        supabase.from('purchase_orders').select('*').eq('user_id', userId),
-        supabase.from('postos').select('*').eq('user_id', userId),
-        supabase.from('groups').select('*').eq('user_id', userId),
-        supabase.from('suppliers').select('*').eq('user_id', userId),
-        supabase.from('user_settings').select('*').eq('user_id', userId).single()
-      ]);
-
-      setOrders(ordersRes.data || []);
-      setPostos(postosRes.data || []);
-      setGroups(groupsRes.data || []);
-      setSuppliers(suppliersRes.data || []);
-      setSettings(settingsRes.data?.settings || {});
+      console.log('🚀 FinancialDashboard: Carregando dados com cache otimizado...');
+      
+      // Usar cacheManager para carregar todos os dados otimizados
+      const result = await cacheManager.getAllUserData(userId);
+      
+      if (result.error) {
+        throw result.error;
+      }
+      
+      const { data } = result;
+      
+      // Aplicar dados aos states
+      setOrders(data.purchaseOrders || []);
+      setPostos(data.postos || []);
+      setGroups(data.groups || []);
+      setSuppliers(data.suppliers || []);
+      setSettings(data.settings || {});
+      
+      // Log das fontes de cache
+      console.log('✅ FinancialDashboard dados carregados:', {
+        orders: data.purchaseOrders?.length || 0,
+        postos: data.postos?.length || 0,
+        groups: data.groups?.length || 0,
+        suppliers: data.suppliers?.length || 0,
+        sources: data.sources
+      });
+      
+      // Toast informativo sobre cache quando tudo vem do cache
+      if (data.sources.orders === 'cache' && data.sources.config === 'cache') {
+        toast({
+          title: '⚡ Cache Hit!',
+          description: 'Dashboard carregado instantaneamente do Redis',
+          duration: 2000
+        });
+      }
+      
     } catch (err) {
       console.error('Erro ao carregar dados:', err);
       toast({ title: '❌ Erro ao carregar dados', variant: 'destructive' });
@@ -527,7 +545,7 @@ export default function FinancialDashboard() {
       return [
         order.order_date,
         posto?.name || 'N/D',
-        settings.fuelTypes?.[order.fuel_type]?.name || order.fuel_type || 'N/D',
+        settings.fuelTypes?.[order.fuel_type]?.name || defaultSettings.fuelTypes?.[order.fuel_type]?.name || order.fuel_type || 'N/D',
         order.volume || 0,
         (order.unit_price || 0).toFixed(4),
         ((order.unit_price || 0) * (order.volume || 0)).toFixed(2),
@@ -611,7 +629,7 @@ export default function FinancialDashboard() {
                     <td>${new Date(order.invoice_date + 'T00:00:00').toLocaleDateString('pt-BR')}</td>
                     <td>${paymentDate ? paymentDate.toLocaleDateString('pt-BR') : 'N/D'}</td>
                     <td>${posto?.name || 'N/D'}</td>
-                    <td>${settings.fuelTypes?.[order.fuel_type]?.name || order.fuel_type}</td>
+                    <td>${settings.fuelTypes?.[order.fuel_type]?.name || defaultSettings.fuelTypes?.[order.fuel_type]?.name || order.fuel_type}</td>
                     <td class="text-right">${(order.volume || 0).toLocaleString('pt-BR')}</td>
                     <td class="text-right">R$ ${(order.unit_price || 0).toFixed(4)}</td>
                     <td class="text-right">R$ ${totalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
@@ -952,7 +970,8 @@ export default function FinancialDashboard() {
           <CardDescription>
             Controle os limites de pagamento para cada dia da semana e acompanhe os valores a pagar
             {selectedWeek && (
-              <div className="mt-2">
+              <>
+                <br/>
                 <span className="text-xs text-green-600 dark:text-green-400">
                   📅 Mostrando dados da semana: {new Date(selectedWeek + 'T00:00:00').toLocaleDateString('pt-BR')} a {
                     (() => {
@@ -962,7 +981,7 @@ export default function FinancialDashboard() {
                     })()
                   }
                 </span>
-              </div>
+              </>
             )}
           </CardDescription>
         </CardHeader>
@@ -1201,7 +1220,7 @@ export default function FinancialDashboard() {
                 return (
                   <div key={fuel} className="space-y-1">
                     <div className="flex justify-between text-sm">
-                      <span className="font-medium">{settings.fuelTypes?.[fuel]?.name || fuel}</span>
+                      <span className="font-medium">{settings.fuelTypes?.[fuel]?.name || defaultSettings.fuelTypes?.[fuel]?.name || fuel}</span>
                       <span className="font-bold">{volume.toLocaleString('pt-BR')} L</span>
                     </div>
                     <div className="w-full bg-gray-200 rounded-full h-2">
@@ -1274,7 +1293,7 @@ export default function FinancialDashboard() {
                       <td className="p-2">{new Date(order.invoice_date + 'T00:00:00').toLocaleDateString('pt-BR')}</td>
                       <td className="p-2">{paymentDate ? paymentDate.toLocaleDateString('pt-BR') : 'N/D'}</td>
                       <td className="p-2">{posto?.name || 'N/D'}</td>
-                      <td className="p-2">{settings.fuelTypes?.[order.fuel_type]?.name || order.fuel_type}</td>
+                      <td className="p-2">{settings.fuelTypes?.[order.fuel_type]?.name || defaultSettings.fuelTypes?.[order.fuel_type]?.name || order.fuel_type}</td>
                       <td className="p-2 text-right font-mono">{(order.volume || 0).toLocaleString('pt-BR')}</td>
                       <td className="p-2 text-right font-mono">R$ {(order.unit_price || 0).toFixed(4)}</td>
                       <td className="p-2 text-right font-mono font-bold">R$ {totalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>

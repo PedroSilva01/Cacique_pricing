@@ -2,9 +2,12 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { DollarSign, Save, RefreshCw, Trash2, MapPin, Building, Copy, AlertTriangle, CheckCircle, ChevronDown, ChevronRight, X } from 'lucide-react';
 import { supabase } from '@/lib/customSupabaseClient';
+import { priceCacheService } from '@/lib/priceCacheService';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { useToast } from '@/components/ui/use-toast';
 import { showErrorToast } from '@/lib/utils';
+import { defaultSettings } from '@/lib/mockData';
+import { cacheManager } from '@/lib/cacheManager';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -117,7 +120,7 @@ const PriceEntry = () => {
     return currentSupplier.available_products.includes(fuelKey);
   }, [currentSupplier]);
 
-  // Fetch últimos preços adicionados - apenas da data filtrada
+  // Fetch últimos preços adicionados - usando cache Redis quando possível
   const fetchRecentPrices = useCallback(async (page = 1) => {
     // Só busca se tiver data selecionada no filtro
     if (!recentPricesFilterDate) {
@@ -136,23 +139,39 @@ const PriceEntry = () => {
     try {
       const itemsPerPage = 7; // Limite de itens processados por página
 
-      // Buscar TODOS os registros da data para processar
-      const { data, error } = await supabase
-        .from('daily_prices')
-        .select(`
-          id,
-          date,
-          prices,
-          created_at,
-          group_ids,
-          suppliers (name),
-          base_cities (name),
-          user_id
-        `)
-        .eq('date', recentPricesFilterDate)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
+      console.log('🔍 Fetching recent prices with Redis cache...');
+      
+      // Tentar buscar do cache Redis primeiro
+      const { data: cachedData, error: cacheError, source } = await priceCacheService.getRecentPrices(
+        recentPricesFilterDate, 
+        userId
+      );
+      
+      let data;
+      if (cacheError || !cachedData) {
+        console.log('💿 Fallback to direct Supabase query for recent prices');
+        // Fallback para query direta do Supabase
+        const result = await supabase
+          .from('daily_prices')
+          .select(`
+            id,
+            date,
+            prices,
+            created_at,
+            group_ids,
+            suppliers (name),
+            base_cities (name),
+            user_id
+          `)
+          .eq('date', recentPricesFilterDate)
+          .order('created_at', { ascending: false });
+          
+        if (result.error) throw result.error;
+        data = result.data;
+      } else {
+        data = cachedData;
+        console.log(`🚀 Recent prices loaded from ${source}`);
+      }
 
       // Processar TODOS os dados para exibir cada preço por posto individualmente
       const allProcessedPrices = [];
@@ -709,7 +728,7 @@ const PriceEntry = () => {
           [fuelKey]: { price: lastValidPrice, date: originalDate }
         }));
         
-        const fuelName = settings.fuelTypes[fuelKey]?.name || fuelKey;
+        const fuelName = settings.fuelTypes[fuelKey]?.name || defaultSettings.fuelTypes?.[fuelKey]?.name || fuelKey;
         toast({
           title: '🔄 Preço mantido',
           description: `${fuelName}: R$ ${lastValidPrice.toFixed(4)} (desde ${(() => {
@@ -718,7 +737,7 @@ const PriceEntry = () => {
                             })()})`,
         });
       } else {
-        const fuelName = settings.fuelTypes[fuelKey]?.name || fuelKey;
+        const fuelName = settings.fuelTypes[fuelKey]?.name || defaultSettings.fuelTypes?.[fuelKey]?.name || fuelKey;
         toast({
           title: '⚠️ Nenhum preço anterior',
           description: `Não há preço anterior cadastrado para ${fuelName}.`,
@@ -906,6 +925,8 @@ const PriceEntry = () => {
     setSaving(true);
 
     try {
+      console.log('🔥 Using Redis-cached price saving...');
+      
       // Preparar maintained_prices - só incluir os que estão mantidos
       const maintained = {};
       Object.keys(maintainedPrices).forEach(fuelKey => {
@@ -932,7 +953,8 @@ const PriceEntry = () => {
         }
       }
 
-      // 2. Inserir novo registro individual para cada grupo selecionado
+      // 2. Preparar dados para salvar usando o cache service
+      const pricesToSave = [];
       for (const groupId of selectedGroups) {
         const dataToSave = {
           user_id: user.id,
@@ -943,17 +965,19 @@ const PriceEntry = () => {
           group_ids: [groupId], // UM registro por grupo
           maintained_prices: Object.keys(maintained).length > 0 ? maintained : {},
         };
+        pricesToSave.push(dataToSave);
+      }
 
-        const { error } = await supabase
-          .from('daily_prices')
-          .insert(dataToSave);
-
+      // 3. Usar o cache service para salvar (salva no Supabase + cache Redis)
+      for (const priceData of pricesToSave) {
+        const { data, error } = await priceCacheService.saveDailyPrices(priceData);
+        
         if (error) {
-          console.error(`Erro ao inserir grupo ${groupId}:`, error);
+          console.error(`Erro ao inserir grupo ${priceData.group_ids[0]}:`, error);
           throw error;
         }
-
-        console.log(`✅ Grupo ${groupId} salvo como registro individual`);
+        
+        console.log(`✅ Grupo ${priceData.group_ids[0]} salvo com cache Redis`);
       }
 
       const groupNames = groups.filter(g => selectedGroups.includes(g.id)).map(g => g.name).join(', ');
@@ -1658,7 +1682,7 @@ const PriceEntry = () => {
                       <div className="flex items-center gap-6">
                         <div className="text-right">
                           <p className="font-semibold text-slate-700 dark:text-slate-300">
-                            {settings.fuelTypes[item.fuelType]?.name || item.fuelType}
+                            {settings.fuelTypes[item.fuelType]?.name || defaultSettings.fuelTypes?.[item.fuelType]?.name || item.fuelType}
                           </p>
                           <p className="text-sm text-slate-500 dark:text-slate-500">
                             {(() => {

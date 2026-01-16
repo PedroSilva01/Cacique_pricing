@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Table, RefreshCw, Edit3, Filter, Store, Users, MapPin, DollarSign } from 'lucide-react';
 import { supabase } from '@/lib/customSupabaseClient';
+import { priceCacheService } from '@/lib/priceCacheService';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { useToast } from '@/components/ui/use-toast';
 import { showErrorToast } from '@/lib/utils';
@@ -186,25 +187,36 @@ const PriceEdit = () => {
 
     setLoading(true);
     try {
-      // Buscar preços individuais dos postos (station_prices)
-      const { data: stationPricesData, error: stationError } = await supabase
-        .from('station_prices')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('date', selectedDate)
-        .in('station_id', groupPostos.map(p => p.id));
+      console.log('🔍 Loading posto prices with Redis cache...');
+      
+      // Use Redis cache service for both station and group prices
+      const [stationPricesRes, groupPricesRes] = await Promise.all([
+        // Get station prices with caching
+        priceCacheService.getStationPrices(
+          selectedDate,
+          userId,
+          groupPostos.map(p => p.id),
+          true // useCache
+        ),
+        // Get group prices with caching
+        priceCacheService.getDailyPrices({
+          date: selectedDate,
+          userId,
+          groupIds: [selectedGroup],
+          useCache: true
+        })
+      ]);
 
-      if (stationError) throw stationError;
+      console.log('🔍 DEBUG PriceEdit - Cache results:', {
+        stationPrices: { count: stationPricesRes.data?.length || 0, source: stationPricesRes.source },
+        groupPrices: { count: groupPricesRes.data?.length || 0, source: groupPricesRes.source }
+      });
 
-      // Buscar preços do grupo (daily_prices) para usar como fallback
-      const { data: groupPricesData, error: groupError } = await supabase
-        .from('daily_prices')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('date', selectedDate)
-        .contains('group_ids', [selectedGroup]);
+      if (stationPricesRes.error) throw stationPricesRes.error;
+      if (groupPricesRes.error) throw groupPricesRes.error;
 
-      if (groupError) throw groupError;
+      const stationPricesData = stationPricesRes.data;
+      const groupPricesData = groupPricesRes.data;
 
       // Organizar preços por posto
       const pricesByPosto = {};
@@ -253,40 +265,21 @@ const PriceEdit = () => {
     if (!editingPosto) return;
 
     try {
-      // Verificar se já existe um registro de station_prices para este posto/data
-      const { data: existingData, error: checkError } = await supabase
-        .from('station_prices')
-        .select('id')
-        .eq('user_id', userId)
-        .eq('date', selectedDate)
-        .eq('station_id', editingPosto.id)
-        .maybeSingle();
+      console.log('💾 Saving station price with Redis cache...');
+      
+      // Use cache service to save station prices (handles Supabase + Redis)
+      const stationPriceUpdate = {
+        user_id: userId,
+        date: selectedDate,
+        station_id: editingPosto.id,
+        prices: editingPrices
+      };
 
-      if (checkError && checkError.code !== 'PGRST116') throw checkError;
-
-      let error;
-      if (existingData) {
-        // Atualizar registro existente
-        const updateResult = await supabase
-          .from('station_prices')
-          .update({ prices: editingPrices })
-          .eq('id', existingData.id);
-        error = updateResult.error;
-      } else {
-        // Criar novo registro
-        const insertResult = await supabase
-          .from('station_prices')
-          .insert({
-            user_id: userId,
-            date: selectedDate,
-            station_id: editingPosto.id,
-            prices: editingPrices
-          });
-        error = insertResult.error;
-      }
+      const { data, error } = await priceCacheService.saveStationPrices([stationPriceUpdate]);
 
       if (error) throw error;
 
+      console.log('✅ Station price saved with Redis cache');
       toast({ title: 'Preços do posto atualizados com sucesso!' });
 
       // Atualizar estado local
@@ -567,7 +560,7 @@ const PriceEdit = () => {
                     <div key={fuelKey} className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
                       <div>
                         <Label className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1 block">
-                          {settings.fuelTypes[fuelKey]?.name || fuelKey}
+                          {settings.fuelTypes[fuelKey]?.name || defaultSettings.fuelTypes?.[fuelKey]?.name || fuelKey}
                         </Label>
                         <div className="text-xs text-slate-500 dark:text-slate-400">
                           Preço do grupo: R$ {groupPrice?.toFixed(4) || '0.0000'}

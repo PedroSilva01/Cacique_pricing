@@ -253,13 +253,64 @@ export default defineConfig({
 		},
 	},
 	build: {
+		target: 'esnext',
+		minify: 'esbuild',
+		cssMinify: true,
+		sourcemap: false,
+		outDir: 'dist',
+		assetsDir: 'assets',
+		chunkSizeWarningLimit: 1000,
 		rollupOptions: {
 			external: [
 				'@babel/parser',
 				'@babel/traverse',
 				'@babel/generator',
 				'@babel/types'
-			]
-		}
+			],
+			output: {
+				manualChunks: {
+					// Vendor chunks
+					'vendor-react': ['react', 'react-dom'],
+					'vendor-router': ['react-router-dom'],
+					'vendor-ui': ['lucide-react', 'framer-motion'],
+					'vendor-forms': ['react-hook-form'],
+					'vendor-charts': ['recharts'],
+					'vendor-utils': ['date-fns', 'lodash.debounce'],
+					
+					// App chunks
+					'lib-security': ['./src/lib/security.js'],
+					'lib-performance': ['./src/lib/performance.js'],
+					'lib-cache': ['./src/lib/priceCacheService.js', './src/lib/redisClient.js'],
+					
+					// Page chunks
+					'pages-main': ['./src/pages/PriceEntry.jsx', './src/pages/GroupPrices.jsx'],
+					'pages-secondary': ['./src/pages/PriceEdit.jsx', './src/pages/PurchaseOrders.jsx'],
+					'pages-analytics': ['./src/pages/VolumeAnalytics.jsx', './src/pages/FinancialDashboard.jsx'],
+					'pages-settings': ['./src/pages/SettingsPage.jsx']
+				},
+				chunkFileNames: 'assets/[name]-[hash].js',
+				entryFileNames: 'assets/[name]-[hash].js',
+				assetFileNames: 'assets/[name]-[hash].[ext]'
+			}
+		},
+		reportCompressedSize: false,
+		assetsInlineLimit: 4096
+	},
+	optimizeDeps: {
+		include: [
+			'react',
+			'react-dom',
+			'react-router-dom',
+			'lucide-react',
+			'framer-motion',
+			'@upstash/redis',
+			'isomorphic-dompurify'
+		],
+		exclude: [
+			'@babel/parser',
+			'@babel/traverse', 
+			'@babel/generator',
+			'@babel/types'
+		]
 	}
 });

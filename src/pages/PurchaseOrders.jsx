@@ -2,7 +2,9 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ShoppingCart, Plus, AlertTriangle, ChevronDown, ChevronUp, Save, Trash2, Edit2, Check, X, BarChart3, Download, Filter } from 'lucide-react';
 import { supabase } from '@/lib/customSupabaseClient';
+import { defaultSettings } from '@/lib/mockData';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
+import { cacheManager } from '@/lib/cacheManager';
 import { useToast } from '@/components/ui/use-toast';
 import { showErrorToast } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -111,7 +113,7 @@ const PurchaseOrders = () => {
     const rows = orders.map(order => [
       order.postos?.name || '-',
       order.base_cities?.name || '-',
-      settings.fuelTypes?.[order.fuel_type]?.name || order.fuel_type,
+      settings.fuelTypes?.[order.fuel_type]?.name || defaultSettings.fuelTypes?.[order.fuel_type]?.name || order.fuel_type,
       order.volume?.toLocaleString('pt-BR') || '-',
       `R$ ${order.price_per_liter?.toFixed(4) || '-'}`,
       `R$ ${order.effective_price?.toFixed(4) || '-'}`,
@@ -308,29 +310,47 @@ const PurchaseOrders = () => {
   const loadInitialData = async () => {
     setLoading(true);
     try {
-      const [postosRes, groupsRes, suppliersRes, basesRes, settingsRes, routesRes] = await Promise.all([
-        supabase.from('postos').select('*, city:cities(id, name)').eq('user_id', userId),
-        supabase.from('groups').select('*').eq('user_id', userId),
-        supabase.from('suppliers').select('*').eq('user_id', userId),
-        supabase.from('base_cities').select('*').eq('user_id', userId),
-        supabase.from('user_settings').select('*').eq('user_id', userId).single(),
-        supabase.from('freight_routes').select('*, origin:base_cities!origin_city_id(id, name), destination:cities!destination_city_id(id, name)').eq('user_id', userId)
-      ]);
+      console.log('🚀 PurchaseOrders: Carregando dados iniciais com cache otimizado...');
+      
+      // Usar cacheManager para configurações básicas
+      const configResult = await cacheManager.getUserConfigData(userId);
+      const freightResult = await cacheManager.getFreightData(userId);
+      
+      if (configResult.error) throw configResult.error;
+      if (freightResult.error) throw freightResult.error;
+      
+      // Aplicar configurações aos states
+      setPostos(configResult.data.postos || []);
+      setGroups(configResult.data.groups || []);
+      setSuppliers(configResult.data.suppliers || []);
+      setBaseCities(configResult.data.baseCities || []);
+      setSettings(configResult.data.settings || {});
+      setFreightRoutes(freightResult.data || []);
+      
+      console.log('✅ PurchaseOrders dados iniciais carregados:', {
+        postos: configResult.data.postos?.length || 0,
+        groups: configResult.data.groups?.length || 0,
+        suppliers: configResult.data.suppliers?.length || 0,
+        baseCities: configResult.data.baseCities?.length || 0,
+        freightRoutes: freightResult.data?.length || 0,
+        sources: {
+          config: configResult.data?.source || 'error',
+          freight: freightResult.source || 'error'
+        }
+      });
+      
+      // Toast informativo sobre cache
+      if (configResult.data?.source === 'cache' && freightResult.source === 'cache') {
+        toast({
+          title: '⚡ Cache Hit!',
+          description: 'Configurações carregadas instantaneamente do Redis',
+          duration: 2000
+        });
+      }
 
-      if (postosRes.error) throw postosRes.error;
-      if (groupsRes.error) throw groupsRes.error;
-      if (suppliersRes.error) throw suppliersRes.error;
-      if (basesRes.error) throw basesRes.error;
-      if (settingsRes.error && settingsRes.error.code !== 'PGRST116') throw settingsRes.error;
-      if (routesRes.error) throw routesRes.error;
-
-      setPostos(postosRes.data || []);
-      setGroups(groupsRes.data || []);
-      setSuppliers(suppliersRes.data || []);
-      setBaseCities(basesRes.data || []);
-      setSettings(settingsRes.data?.settings || {});
-      setFinancialCostRate(settingsRes.data?.financial_cost_rate || 0.00535);
-      setFreightRoutes(routesRes.data || []);
+      // FinancialCostRate a partir das configurações
+      const userSettings = configResult.data.settings;
+      setFinancialCostRate(userSettings?.financial_cost_rate || 0.00535);
     } catch (err) {
       console.error('Erro ao carregar dados:', err);
       showErrorToast(toast, { title: 'Erro ao carregar dados', error: err });
@@ -986,7 +1006,7 @@ const PurchaseOrders = () => {
                           })
                           .map(key => (
                             <SelectItem key={key} value={key}>
-                              {settings.fuelTypes[key].name}
+                              {settings.fuelTypes[key]?.name || defaultSettings.fuelTypes?.[key]?.name || key}
                             </SelectItem>
                           ))}
                       </SelectContent>
@@ -1346,7 +1366,7 @@ const PurchaseOrders = () => {
                            (order.base_cities && typeof order.base_cities === 'object' ? order.base_cities.name : null) || 
                            'N/D'}
                         </TableCell>
-                        <TableCell className="px-2 whitespace-nowrap">{settings.fuelTypes?.[order.fuel_type]?.name || order.fuel_type}</TableCell>
+                        <TableCell className="px-2 whitespace-nowrap">{settings.fuelTypes?.[order.fuel_type]?.name || defaultSettings.fuelTypes?.[order.fuel_type]?.name || order.fuel_type}</TableCell>
                         <TableCell className="px-2 text-right whitespace-nowrap font-mono">{Math.round(order.volume / 1000)} m³</TableCell>
                         <TableCell className="px-2 text-right whitespace-nowrap font-mono">R$ {order.unit_price.toFixed(4)}</TableCell>
                         <TableCell className="px-2 text-right whitespace-nowrap font-mono font-bold text-green-600">

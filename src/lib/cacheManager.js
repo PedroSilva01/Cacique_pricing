@@ -300,6 +300,16 @@ class CacheManager {
       return { data: null, error };
     }
   }
+
+  // Invalidar cache de configurações do usuário
+  async invalidateUserSettings(userId) {
+    try {
+      return await this.cacheService.invalidateUserSettings(userId);
+    } catch (error) {
+      console.error('Erro ao invalidar cache de user_settings:', error);
+      return false;
+    }
+  }
 }
 
 // Export singleton

@@ -542,14 +542,26 @@ const SettingsPage = () => {
   };
   
   const handleSaveSettings = async () => {
+      if (!userId) {
+        console.error('❌ Usuário não autenticado');
+        showErrorToast(toast, { title: 'Erro', description: 'Usuário não autenticado' });
+        return;
+      }
+      
       try {
+        console.log('💾 Salvando configurações do usuário:', { user_id: user.id, settings });
+        
         const { error } = await supabase.from('user_settings').upsert({ user_id: user.id, settings: settings }, { onConflict: 'user_id' });
         if (error) throw error;
         
+        console.log('✅ Configurações salvas no Supabase');
+        
         // INVALIDAR CACHE AUTOMATICAMENTE após salvar configurações
         try {
-          await cacheManager.invalidateUserSettings(userId);
+          const cacheResult = await cacheManager.invalidateUserSettings(userId);
+          console.log('🗑️ Cache invalidado:', cacheResult);
         } catch (cacheError) {
+          console.error('❌ Erro ao invalidar cache:', cacheError);
         }
         
         toast({ 
@@ -558,6 +570,7 @@ const SettingsPage = () => {
           duration: 3000
         });
       } catch (error) {
+        console.error('❌ Erro ao salvar configurações:', error);
         showErrorToast(toast, { title: 'Erro ao salvar configurações', error });
       }
   };
@@ -1887,23 +1900,36 @@ const RouteModal = ({ data, baseCities = [], cities, settings, onClose, onSave }
 
 const GeneralSettingsEditor = ({ title, icon, settingsKey, settings, setSettings, onSave, fields, syncFuelTypesWithDefaults }) => {
     const items = settings[settingsKey] || {};
-    const handleItemChange = (key, field, value) => {
-        const updatedItems = { ...items, [key]: { ...items[key], [field]: value }};
-        setSettings({...settings, [settingsKey]: updatedItems });
-    };
-    const handleAddItem = () => {
+    const handleItemChange = useCallback((key, field, value) => {
+        setSettings(prevSettings => {
+            const items = prevSettings[settingsKey] || {};
+            const updatedItems = { ...items, [key]: { ...items[key], [field]: value }};
+            return {...prevSettings, [settingsKey]: updatedItems };
+        });
+    }, [settingsKey]);
+
+    const handleAddItem = useCallback(() => {
         // CORRIGIDO: Usar chave sem prefixo item_ para evitar conflitos
         const newKey = `custom_${Date.now()}`;
-        const newItem = Object.keys(fields).reduce((acc, field) => ({...acc, [field]: ''}), {});
+        const newItem = { name: '', ...Object.fromEntries(Object.keys(fields).map(field => [field, ''])) };
+        
         if (Object.keys(fields).includes('volume')) {
             newItem.volume = 0;
         }
-        setSettings({...settings, [settingsKey]: {...items, [newKey]: newItem }});
-    };
-    const handleRemoveItem = (key) => {
-        const {[key]: _, ...rest} = items;
-        setSettings({...settings, [settingsKey]: rest});
-    };
+        
+        setSettings(prevSettings => {
+            const items = prevSettings[settingsKey] || {};
+            return {...prevSettings, [settingsKey]: {...items, [newKey]: newItem }};
+        });
+    }, [settingsKey, fields]);
+
+    const handleRemoveItem = useCallback((key) => {
+        setSettings(prevSettings => {
+            const items = prevSettings[settingsKey] || {};
+            const {[key]: _, ...rest} = items;
+            return {...prevSettings, [settingsKey]: rest};
+        });
+    }, [settingsKey]);
     return (
         <div>
             <div className="flex items-center gap-3 mb-4">{icon}<h4 className="text-lg font-bold text-foreground">{title}</h4></div>

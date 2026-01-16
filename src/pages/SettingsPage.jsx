@@ -128,6 +128,7 @@ const SettingsPage = () => {
       ));
 
       const rawSettings = settingsRes.data?.settings || {};
+      console.log('📋 Settings carregados do banco:', rawSettings);
       const mergedSettings = {
         ...defaultSettings,
         ...rawSettings,
@@ -141,7 +142,8 @@ const SettingsPage = () => {
           ...(rawSettings.fuelTypes || {}),
         },
       };
-
+      
+      console.log('🔧 Settings merged final:', mergedSettings);
       setSettings(mergedSettings);
     } catch (error) {
       showErrorToast(toast, {
@@ -1945,7 +1947,10 @@ const GeneralSettingsEditor = ({ title, icon, settingsKey, settings, setSettings
             </div>
             <div className="flex gap-2 mt-4">
                 <Button onClick={handleAddItem} className="w-full"><PlusCircle className="w-4 h-4 mr-2"/> Adicionar</Button>
-                <Button onClick={onSave}><Save className="w-4 h-4 mr-2"/> Salvar Gerais</Button>
+                <Button onClick={() => {
+                    console.log('🔘 Botão Salvar Gerais clicado!');
+                    onSave();
+                }}><Save className="w-4 h-4 mr-2"/> Salvar Gerais</Button>
             </div>
         </div>
     );

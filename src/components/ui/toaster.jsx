@@ -15,8 +15,10 @@ export function Toaster() {
 	return (
 		<ToastProvider>
 			{toasts.map(({ id, title, description, action, ...props }) => {
+				// Filtrar props inválidas como 'dismiss'
+				const { dismiss, ...validProps } = props;
 				return (
-					<Toast key={id} {...props}>
+					<Toast key={id} {...validProps}>
 						<div className="grid gap-1">
 							{title && <ToastTitle>{title}</ToastTitle>}
 							{description && (

@@ -362,7 +362,32 @@ const SettingsPage = () => {
       const isUpdate = dataToSave.id;
       let savedRecord = null;
 
-      // Esta seção será implementada corretamente com a função handleSave
+      // IMPLEMENTAR O SALVAMENTO NO SUPABASE
+      console.log('💾 Salvando na tabela:', tableName, 'dados:', record);
+      
+      if (isUpdate) {
+        // UPDATE
+        const { data, error } = await supabase
+          .from(tableName)
+          .update(record)
+          .eq('id', dataToSave.id)
+          .eq('user_id', user.id)
+          .select();
+        
+        if (error) throw error;
+        savedRecord = data && data.length > 0 ? data[0] : null;
+        console.log('✅ Registro atualizado:', savedRecord);
+      } else {
+        // INSERT
+        const { data, error } = await supabase
+          .from(tableName)
+          .insert(record)
+          .select();
+        
+        if (error) throw error;
+        savedRecord = data && data.length > 0 ? data[0] : null;
+        console.log('✅ Registro inserido:', savedRecord);
+      }
       
       // Se salvou um POSTO, sincronizar bandeira do primeiro grupo (se houver)
       if (tableName === 'postos' && savedRecord) {
@@ -1411,7 +1436,20 @@ const ModalWrapper = ({ children, title, onClose, onSave, onSaveCurrent, data, w
                 <Button variant="outline" onClick={onClose} className="border-2 border-slate-300 text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-950/20 font-semibold shadow-md hover:shadow-lg transition-all rounded-xl px-6 py-3">
                     ❌ Cancelar
                 </Button>
-                <Button onClick={() => onSaveCurrent ? onSaveCurrent() : onSave(data)} className="px-8 py-3 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 font-bold rounded-xl">
+                <Button onClick={() => {
+                    console.log('🔘 Botão Salvar do Modal clicado!');
+                    console.log('📋 Data:', data);
+                    console.log('🔧 onSaveCurrent:', typeof onSaveCurrent);
+                    console.log('🔧 onSave:', typeof onSave);
+                    
+                    if (onSaveCurrent) {
+                        console.log('🚀 Chamando onSaveCurrent...');
+                        onSaveCurrent();
+                    } else {
+                        console.log('🚀 Chamando onSave(data)...');
+                        onSave(data);
+                    }
+                }} className="px-8 py-3 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 font-bold rounded-xl">
                     <Save className="w-5 h-5 mr-2" /> ✅ Salvar
                 </Button>
             </footer>

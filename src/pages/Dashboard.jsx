@@ -80,7 +80,6 @@ const Dashboard = () => {
                 schema: 'public', 
                 table: 'daily_prices'
             }, (payload) => {
-                console.log('🔄 Dashboard: daily_prices update:', payload);
                 refetchDashboardData();
             })
             .subscribe();
@@ -93,7 +92,6 @@ const Dashboard = () => {
                 schema: 'public',
                 table: 'groups'
             }, (payload) => {
-                console.log('🔄 Dashboard: groups update:', payload);
                 refetchDashboardData();
             })
             .subscribe();
@@ -106,7 +104,6 @@ const Dashboard = () => {
                 schema: 'public',
                 table: 'postos'
             }, (payload) => {
-                console.log('🔄 Dashboard: postos update:', payload);
                 refetchDashboardData();
             })
             .subscribe();
@@ -119,7 +116,6 @@ const Dashboard = () => {
                 schema: 'public',
                 table: 'suppliers'
             }, (payload) => {
-                console.log('🔄 Dashboard: suppliers update:', payload);
                 refetchDashboardData();
             })
             .subscribe();
@@ -148,12 +144,10 @@ const Dashboard = () => {
 
     const updateOilPricesInBackground = useCallback(async () => {
         try {
-            console.log('⚙️ Invocando edge function fetch-oil-prices...');
             const { data, error } = await supabase.functions.invoke('fetch-oil-prices');
             if (error) throw error;
 
             if (data?.data && (data.data.WTI || data.data.BRENT)) {
-                console.log('📡 Retorno bruto da API (edge function):', data.data);
 
                 const now = new Date();
                 const year = now.getFullYear();
@@ -237,8 +231,6 @@ const Dashboard = () => {
                 };
 
                 setOilPrice(adjustedOilData);
-                console.log('✅ Preço salvo no banco após chamar a API:', data.data);
-                console.log(`✅ Preços de petróleo atualizados e salvos no banco (${today})`);
             }
         } catch (err) {
             console.error('Erro ao atualizar preços em background:', err);
@@ -285,18 +277,15 @@ const Dashboard = () => {
                 const isToday = dbPrices.date === todayStr;
 
                 if (!isToday) {
-                    console.log('Dados de petróleo desatualizados (data:', dbPrices.date, '!= hoje:', todayStr, '), atualizando...');
                     await updateOilPricesInBackground();
                 } else {
                     const lastUpdate = new Date(dbPrices.timestamp || dbPrices.date);
                     const hoursSinceUpdate = (Date.now() - lastUpdate.getTime()) / (1000 * 60 * 60);
                     if (hoursSinceUpdate >= 1 || !dbPrices.brent_price) {
-                        console.log('Atualizando preços de petróleo (última atualização há', hoursSinceUpdate.toFixed(1), 'horas)');
                         await updateOilPricesInBackground();
                     }
                 }
             } else {
-                console.log('Nenhum dado no banco, buscando da API...');
                 await updateOilPricesInBackground();
             }
 
@@ -329,7 +318,6 @@ const Dashboard = () => {
         
         // Verificar a cada 15 minutos se precisa atualizar (economia de API calls)
         const intervalId = setInterval(() => {
-            console.log(`[${new Date().toLocaleTimeString()}] Verificando se preços de petróleo precisam ser atualizados...`);
             fetchOilPrice();
         }, 15 * 60 * 1000); // 15 minutos
         

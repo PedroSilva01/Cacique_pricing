@@ -604,13 +604,6 @@ const PurchaseOrders = () => {
       const postoGroupIds = posto?.group_ids || [];
       const validGroupId = postoGroupIds.find(gId => groups.some(g => g.id === gId));
       
-      console.log('🔍 Validação grupo posto:', {
-        postoGroupIds,
-        availableGroups: groups.map(g => g.id),
-        validGroupId,
-        posto: posto?.name
-      });
-      
       const ordersToSave = productEntries.map(entry => {
         const calc = calculatePrice(entry.totalValue, entry.volume, entry.paymentDays, selectedStation, entry.specificSupplier);
         const freightCostValue = entry.vehicleType && selectedBase && selectedBase !== 'all' 
@@ -1131,14 +1124,6 @@ const PurchaseOrders = () => {
                           // Para outros fornecedores, buscar do daily_prices
                           referencePrice = getDailyPrice(entry.fuelType, entry.specificSupplier);
                           referencePriceLabel = 'Preço Fornecedor';
-                          
-                          console.log('🔍 Buscando preço fornecedor:', {
-                            fuelType: entry.fuelType,
-                            supplierId: entry.specificSupplier,
-                            supplierName: supplier?.name,
-                            dailyPricesCount: dailyPrices.length,
-                            foundPrice: referencePrice
-                          });
                         }
                       } else {
                         referencePrice = selectedStation ? getTargetPrice(selectedStation, entry.fuelType, selectedBase, entry.specificSupplier) : null;

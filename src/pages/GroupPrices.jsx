@@ -77,7 +77,6 @@ const GroupPrices = () => {
         table: 'daily_prices',
         filter: `user_id=eq.${userId}`
       }, (payload) => {
-        console.log('🔄 GroupPrices: daily_prices update:', payload);
         // Recarregar preços se grupo e data estão selecionados
         if (selectedGroup && selectedDate) {
           loadGroupPrices();
@@ -94,7 +93,6 @@ const GroupPrices = () => {
         table: 'groups',
         filter: `user_id=eq.${userId}`
       }, (payload) => {
-        console.log('🔄 GroupPrices: groups update:', payload);
         fetchData(); // Recarrega dados mestres
       })
       .subscribe();
@@ -108,7 +106,6 @@ const GroupPrices = () => {
         table: 'postos',
         filter: `user_id=eq.${userId}`
       }, (payload) => {
-        console.log('🔄 GroupPrices: postos update:', payload);
         fetchData();
       })
       .subscribe();
@@ -176,8 +173,6 @@ const GroupPrices = () => {
 
     // Carregar preços do dia para todos os postos do grupo usando Redis cache
     try {
-      console.log('🔍 Loading group prices with Redis cache...');
-
       const [pricesRes, stationPricesRes] = await Promise.all([
         // Use cache service for daily prices
         priceCacheService.getDailyPrices({
@@ -196,21 +191,6 @@ const GroupPrices = () => {
           true // useCache
         )
       ]);
-
-      console.log('🔍 DEBUG GroupPrices - Resultados das queries com Redis:', {
-        pricesRes: {
-          data: pricesRes.data,
-          error: pricesRes.error,
-          count: pricesRes.data?.length || 0,
-          source: pricesRes.source
-        },
-        stationPricesRes: {
-          data: stationPricesRes.data,
-          error: stationPricesRes.error,
-          count: stationPricesRes.data?.length || 0,
-          source: stationPricesRes.source
-        }
-      });
 
       if (pricesRes.error) throw pricesRes.error;
       if (stationPricesRes.error) throw stationPricesRes.error;
@@ -253,15 +233,6 @@ const GroupPrices = () => {
       // Get individual station prices (sobrescreve se existir)
       stationPricesRes.data?.forEach(sp => {
         stationPricesByPosto[sp.station_id] = sp.prices || {};
-      });
-
-      console.log('🔍 DEBUG GroupPrices - Estados finais sendo definidos:', {
-        pricesByPosto,
-        stationPricesByPosto,
-        priceData: Object.keys(pricesByPosto).length,
-        stationPrices: Object.keys(stationPricesByPosto).length,
-        selectedDate,
-        groupData: groupData?.name
       });
 
       setPriceData(pricesByPosto);
@@ -376,8 +347,6 @@ const GroupPrices = () => {
 
     setSaving(true);
     try {
-      console.log('💾 Saving station prices with Redis cache...');
-      
       // Salvar preços editados como station_prices para cada posto
       const stationPricesUpdates = [];
       
@@ -398,18 +367,16 @@ const GroupPrices = () => {
         
         if (error) throw error;
         
-        console.log('✅ Station prices saved with Redis cache');
+        toast({
+          title: '✅ Preços salvos!',
+          description: `Preços individuais salvos para ${stationPricesUpdates.length} posto(s) com cache Redis.`
+        });
+
+        // Recarregar dados para refletir mudanças
+        loadGroupPrices();
+        setEditMode(false);
+        setEditingPrices({});
       }
-
-      toast({
-        title: '✅ Preços salvos!',
-        description: `Preços individuais salvos para ${stationPricesUpdates.length} posto(s) com cache Redis.`
-      });
-
-      // Recarregar dados para refletir mudanças
-      loadGroupPrices();
-      setEditMode(false);
-      setEditingPrices({});
 
     } catch (err) {
       console.error('Erro ao salvar preços editados:', err);
@@ -486,12 +453,6 @@ const GroupPrices = () => {
     if (availableFuels.size === 0) {
       return Object.keys(settings.fuelTypes || {});
     }
-
-    console.log('🔍 DEBUG - Combustíveis disponíveis para o grupo:', {
-      group: groupData.name,
-      availableFuels: Array.from(availableFuels),
-      totalFuels: Object.keys(settings.fuelTypes || {}).length
-    });
 
     return Array.from(availableFuels);
   };

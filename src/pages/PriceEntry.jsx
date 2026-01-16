@@ -922,8 +922,6 @@ const PriceEntry = () => {
     setSaving(true);
 
     try {
-      console.log('🔥 Using Redis-cached price saving...');
-      
       // Preparar maintained_prices - só incluir os que estão mantidos
       const maintained = {};
       Object.keys(maintainedPrices).forEach(fuelKey => {
@@ -945,8 +943,6 @@ const PriceEntry = () => {
 
         if (deleteError) {
           console.error(`Erro ao deletar registros do grupo ${groupId}:`, deleteError);
-        } else {
-          console.log(`🗑️ Deletados registros existentes do grupo ${groupId}`);
         }
       }
 
@@ -973,8 +969,6 @@ const PriceEntry = () => {
           console.error(`Erro ao inserir grupo ${priceData.group_ids[0]}:`, error);
           throw error;
         }
-        
-        console.log(`✅ Grupo ${priceData.group_ids[0]} salvo com cache Redis`);
       }
 
       const groupNames = groups.filter(g => selectedGroups.includes(g.id)).map(g => g.name).join(', ');

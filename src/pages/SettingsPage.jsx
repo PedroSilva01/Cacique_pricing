@@ -128,7 +128,6 @@ const SettingsPage = () => {
       ));
 
       const rawSettings = settingsRes.data?.settings || {};
-      console.log('📋 Settings carregados do banco:', rawSettings);
       const mergedSettings = {
         ...defaultSettings,
         ...rawSettings,
@@ -143,7 +142,6 @@ const SettingsPage = () => {
         },
       };
       
-      console.log('🔧 Settings merged final:', mergedSettings);
       setSettings(mergedSettings);
     } catch (error) {
       showErrorToast(toast, {
@@ -363,8 +361,6 @@ const SettingsPage = () => {
       let savedRecord = null;
 
       // IMPLEMENTAR O SALVAMENTO NO SUPABASE
-      console.log('💾 Salvando na tabela:', tableName, 'dados:', record);
-      
       if (isUpdate) {
         // UPDATE
         const { data, error } = await supabase
@@ -376,7 +372,6 @@ const SettingsPage = () => {
         
         if (error) throw error;
         savedRecord = data && data.length > 0 ? data[0] : null;
-        console.log('✅ Registro atualizado:', savedRecord);
       } else {
         // INSERT
         const { data, error } = await supabase
@@ -386,7 +381,6 @@ const SettingsPage = () => {
         
         if (error) throw error;
         savedRecord = data && data.length > 0 ? data[0] : null;
-        console.log('✅ Registro inserido:', savedRecord);
       }
       
       // Se salvou um POSTO, sincronizar bandeira do primeiro grupo (se houver)
@@ -576,17 +570,12 @@ const SettingsPage = () => {
       }
       
       try {
-        console.log('💾 Salvando configurações do usuário:', { user_id: user.id, settings });
-        
         const { error } = await supabase.from('user_settings').upsert({ user_id: user.id, settings: settings }, { onConflict: 'user_id' });
         if (error) throw error;
         
-        console.log('✅ Configurações salvas no Supabase');
-        
         // INVALIDAR CACHE AUTOMATICAMENTE após salvar configurações
         try {
-          const cacheResult = await cacheManager.invalidateUserSettings(userId);
-          console.log('🗑️ Cache invalidado:', cacheResult);
+          await cacheManager.invalidateUserSettings(userId);
         } catch (cacheError) {
           console.error('❌ Erro ao invalidar cache:', cacheError);
         }
@@ -1436,20 +1425,7 @@ const ModalWrapper = ({ children, title, onClose, onSave, onSaveCurrent, data, w
                 <Button variant="outline" onClick={onClose} className="border-2 border-slate-300 text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-950/20 font-semibold shadow-md hover:shadow-lg transition-all rounded-xl px-6 py-3">
                     ❌ Cancelar
                 </Button>
-                <Button onClick={() => {
-                    console.log('🔘 Botão Salvar do Modal clicado!');
-                    console.log('📋 Data:', data);
-                    console.log('🔧 onSaveCurrent:', typeof onSaveCurrent);
-                    console.log('🔧 onSave:', typeof onSave);
-                    
-                    if (onSaveCurrent) {
-                        console.log('🚀 Chamando onSaveCurrent...');
-                        onSaveCurrent();
-                    } else {
-                        console.log('🚀 Chamando onSave(data)...');
-                        onSave(data);
-                    }
-                }} className="px-8 py-3 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 font-bold rounded-xl">
+                <Button onClick={() => onSaveCurrent ? onSaveCurrent() : onSave(data)} className="px-8 py-3 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 font-bold rounded-xl">
                     <Save className="w-5 h-5 mr-2" /> ✅ Salvar
                 </Button>
             </footer>
@@ -1985,10 +1961,7 @@ const GeneralSettingsEditor = ({ title, icon, settingsKey, settings, setSettings
             </div>
             <div className="flex gap-2 mt-4">
                 <Button onClick={handleAddItem} className="w-full"><PlusCircle className="w-4 h-4 mr-2"/> Adicionar</Button>
-                <Button onClick={() => {
-                    console.log('🔘 Botão Salvar Gerais clicado!');
-                    onSave();
-                }}><Save className="w-4 h-4 mr-2"/> Salvar Gerais</Button>
+                <Button onClick={onSave}><Save className="w-4 h-4 mr-2"/> Salvar Gerais</Button>
             </div>
         </div>
     );

@@ -221,7 +221,6 @@ export default function FinancialDashboard() {
         
         setPriceDeviationAlerts(alerts);
       } catch (err) {
-        console.log('Erro ao carregar alertas de desvio de preço:', err);
       }
     };
     

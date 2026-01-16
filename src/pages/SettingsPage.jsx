@@ -383,22 +383,52 @@ const SettingsPage = () => {
         savedRecord = data && data.length > 0 ? data[0] : null;
       }
       
-      // Se salvou um POSTO, sincronizar bandeira do primeiro grupo (se houver)
+      // Se salvou um POSTO, sincronizar com grupos
       if (tableName === 'postos' && savedRecord) {
-        const groupIds = savedRecord.group_ids || [];
+        const postoGroupIds = savedRecord.group_ids || [];
         
-        if (groupIds.length > 0) {
-          // Buscar o primeiro grupo para pegar sua bandeira
+        if (postoGroupIds.length > 0) {
+          // OTIMIZAÇÃO: Buscar todos grupos de uma vez
+          const { data: groupsData, error: groupsError } = await supabase
+            .from('groups')
+            .select('id, posto_ids')
+            .eq('user_id', user.id)
+            .in('id', postoGroupIds);
+          
+          if (!groupsError && groupsData) {
+            // Preparar updates em lote
+            const groupUpdates = groupsData
+              .filter(group => {
+                const currentPostoIds = Array.isArray(group.posto_ids) ? group.posto_ids : [];
+                return !currentPostoIds.includes(savedRecord.id);
+              })
+              .map(group => ({
+                id: group.id,
+                posto_ids: [...(Array.isArray(group.posto_ids) ? group.posto_ids : []), savedRecord.id]
+              }));
+            
+            // Executar updates em lote se houver alterações
+            if (groupUpdates.length > 0) {
+              const { error: updateError } = await supabase
+                .from('groups')
+                .upsert(groupUpdates);
+              
+              if (updateError) {
+                console.error('Erro ao sincronizar postos com grupos:', updateError);
+              }
+            }
+          }
+          
+          // Sincronizar bandeira do primeiro grupo (se houver)
           const { data: firstGroup, error: groupError } = await supabase
             .from('groups')
             .select('bandeira')
-            .eq('id', groupIds[0])
+            .eq('id', postoGroupIds[0])
             .eq('user_id', user.id)
             .limit(1);
           
           const groupData = firstGroup && firstGroup.length > 0 ? firstGroup[0] : null;
           if (!groupError && groupData && groupData.bandeira && groupData.bandeira !== 'bandeira_branca') {
-            // Atualizar bandeira do posto com a bandeira do grupo
             const { error: updateError } = await supabase
               .from('postos')
               .update({ bandeira: groupData.bandeira })
@@ -408,6 +438,66 @@ const SettingsPage = () => {
             if (updateError) console.error('Erro ao sincronizar bandeira do posto:', updateError);
           }
         }
+      }
+      
+      // Se salvou um GRUPO, sincronizar com postos
+      if (tableName === 'groups' && savedRecord) {
+        const grupoPostoIds = savedRecord.posto_ids || [];
+        
+        if (grupoPostoIds.length > 0) {
+          // OTIMIZAÇÃO: Buscar todos postos de uma vez
+          const { data: postosData, error: postosError } = await supabase
+            .from('postos')
+            .select('id, group_ids')
+            .eq('user_id', user.id)
+            .in('id', grupoPostoIds);
+          
+          if (!postosError && postosData) {
+            // Preparar updates em lote
+            const postoUpdates = postosData
+              .filter(posto => {
+                const currentGroupIds = Array.isArray(posto.group_ids) ? posto.group_ids : [];
+                return !currentGroupIds.includes(savedRecord.id);
+              })
+              .map(posto => ({
+                id: posto.id,
+                group_ids: [...(Array.isArray(posto.group_ids) ? posto.group_ids : []), savedRecord.id]
+              }));
+            
+            // Executar updates em lote se houver alterações
+            if (postoUpdates.length > 0) {
+              const { error: updateError } = await supabase
+                .from('postos')
+                .upsert(postoUpdates);
+              
+              if (updateError) {
+                console.error('Erro ao sincronizar grupos com postos:', updateError);
+              }
+            }
+          }
+        }
+      }
+      
+      // INVALIDAR CACHE após salvar qualquer item que afeta postos/grupos
+      try {
+        // OTIMIZAÇÃO: Executar todas invalidações em paralelo
+        const invalidations = [cacheManager.invalidateUserSettings(userId)];
+        
+        if (tableName === 'postos') {
+          invalidations.push(
+            cacheManager.cacheService.invalidateUserPostos(userId),
+            cacheManager.cacheService.invalidateUserGroups(userId)
+          );
+        } else if (tableName === 'groups') {
+          invalidations.push(
+            cacheManager.cacheService.invalidateUserGroups(userId),
+            cacheManager.cacheService.invalidateUserPostos(userId)
+          );
+        }
+        
+        await Promise.all(invalidations);
+      } catch (cacheError) {
+        console.error('❌ Erro ao invalidar cache:', cacheError);
       }
       
       await fetchData();

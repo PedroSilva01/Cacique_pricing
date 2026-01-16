@@ -336,6 +336,26 @@ export class PriceCacheService {
     return await this.cache.del(key);
   }
 
+  async invalidateUserPostos(userId) {
+    const key = CACHE_KEYS.POSTOS(userId);
+    return await this.cache.del(key);
+  }
+
+  async invalidateUserGroups(userId) {
+    const key = CACHE_KEYS.GROUPS(userId);
+    return await this.cache.del(key);
+  }
+
+  async invalidateUserSuppliers(userId) {
+    const key = CACHE_KEYS.SUPPLIERS(userId);
+    return await this.cache.del(key);
+  }
+
+  async invalidateUserBaseCities(userId) {
+    const key = CACHE_KEYS.BASE_CITIES(userId);
+    return await this.cache.del(key);
+  }
+
   async invalidateUserConfigurations(userId) {
     // Invalidar todas as configurações quando houver mudança
     const keys = [

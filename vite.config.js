@@ -243,7 +243,7 @@ export default defineConfig({
 		cors: true,
 		headers: {
 			'Cross-Origin-Embedder-Policy': 'credentialless',
-			'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://lwzgyzjzgfsfoapzswws.supabase.co https://equal-cat-8480.upstash.io;"
+			'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://lwzgyzjzgfsfoapzswws.supabase.co https://equal-cat-8480.upstash.io wss://lwzgyzjzgfsfoapzswws.supabase.co;"
 		},
 		allowedHosts: true,
 	},

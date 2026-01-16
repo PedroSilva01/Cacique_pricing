@@ -197,6 +197,24 @@ export const validatePriceData = (priceData) => {
     }
   }
   
+  // Validar supplier_id (obrigatório)
+  if (!priceData.supplier_id) {
+    errors.push('ID de fornecedor é obrigatório');
+  } else if (validateUUID(priceData.supplier_id)) {
+    sanitized.supplier_id = priceData.supplier_id;
+  } else {
+    errors.push('ID de fornecedor inválido');
+  }
+  
+  // Validar base_city_id (opcional)
+  if (priceData.base_city_id) {
+    if (validateUUID(priceData.base_city_id)) {
+      sanitized.base_city_id = priceData.base_city_id;
+    } else {
+      errors.push('ID de cidade base inválido');
+    }
+  }
+  
   return {
     isValid: errors.length === 0,
     errors,

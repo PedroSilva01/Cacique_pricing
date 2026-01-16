@@ -12,7 +12,6 @@ class CacheManager {
   // Função unificada para buscar configurações do usuário com cache
   async getUserConfigData(userId) {
     try {
-      console.log('🔄 Carregando configurações do usuário com cache...');
       
       // Tentar buscar tudo do cache primeiro
       const [settingsCache, groupsCache, postosCache, suppliersCache, baseCitiesCache] = await Promise.all([
@@ -80,8 +79,7 @@ class CacheManager {
         // Processar resultados e cachear
         for (const result of results) {
           if (result.error) {
-            console.error(`❌ Erro ao buscar ${result.type}:`, result.error);
-            continue;
+                continue;
           }
           
           freshData[result.type] = result.data;
@@ -117,18 +115,10 @@ class CacheManager {
         source: toBeFetched.length === 0 ? 'cache' : toBeFetched.length === 5 ? 'supabase' : 'mixed'
       };
 
-      console.log(`✅ Configurações carregadas (${result.source}):`, {
-        settings: !!result.settings?.settings,
-        groups: result.groups.length,
-        postos: result.postos.length,
-        suppliers: result.suppliers.length,
-        baseCities: result.baseCities.length
-      });
-
+      
       return { data: result, error: null };
       
     } catch (error) {
-      console.error('❌ Erro ao carregar configurações:', error);
       return { data: null, error };
     }
   }
@@ -141,11 +131,9 @@ class CacheManager {
       const cached = await this.cacheService.getFreightRoutes(userId);
       
       if (cached) {
-        console.log('🚀 Cache HIT para freight routes');
-        return { data: cached, error: null, source: 'cache' };
+          return { data: cached, error: null, source: 'cache' };
       }
 
-      console.log('💿 Cache MISS para freight routes - buscando do Supabase...');
       
       const { data, error } = await supabase
         .from('freight_routes')
@@ -159,11 +147,9 @@ class CacheManager {
         await this.cacheService.setFreightRoutes(userId, data);
       }
 
-      console.log(`✅ Freight routes carregados (${data?.length || 0} rotas)`);
       return { data: data || [], error: null, source: 'supabase' };
       
     } catch (error) {
-      console.error('❌ Erro ao carregar freight routes:', error);
       return { data: [], error };
     }
   }
@@ -184,23 +170,24 @@ class CacheManager {
       const cached = await this.cacheService.getPurchaseOrders(userId);
       
       if (cached) {
-        console.log('🚀 Cache HIT para purchase orders');
-        return { data: cached, error: null, source: 'cache' };
+          return { data: cached, error: null, source: 'cache' };
       }
 
-      console.log('💿 Cache MISS para purchase orders - buscando do Supabase...');
       
       const result = await this.fetchPurchaseOrdersFromSupabase(userId, options);
       
-      // Cachear apenas se foi busca geral (sem filtros)
-      if (!dateFrom && !dateTo && result.data) {
-        await this.cacheService.setPurchaseOrders(userId, result.data);
+      // Cachear apenas se foi busca geral (sem filtros) e payload não for muito grande
+      if (!dateFrom && !dateTo && result.data && result.data.length <= 20) {
+        try {
+          await this.cacheService.setPurchaseOrders(userId, result.data);
+        } catch (cacheError) {
+            // Continuar funcionando mesmo sem cache
+        }
       }
 
       return result;
       
     } catch (error) {
-      console.error('❌ Erro ao carregar purchase orders:', error);
       return { data: [], error };
     }
   }
@@ -213,11 +200,11 @@ class CacheManager {
       .select('*')
       .eq('user_id', userId);
 
-    // Se não houver filtros específicos, limitar aos últimos 30 dias para cache
+    // Se não houver filtros específicos, limitar aos últimos 15 dias e máximo 20 pedidos para cache
     if (!dateFrom && !dateTo) {
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      query = query.gte('order_date', thirtyDaysAgo.toISOString().split('T')[0]);
+      const fifteenDaysAgo = new Date();
+      fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 15);
+      query = query.gte('order_date', fifteenDaysAgo.toISOString().split('T')[0]).limit(20);
     } else {
       if (dateFrom) query = query.gte('order_date', dateFrom);
       if (dateTo) query = query.lte('order_date', dateTo);
@@ -227,7 +214,6 @@ class CacheManager {
 
     if (error) throw error;
 
-    console.log(`✅ Purchase orders carregados do Supabase (${data?.length || 0} pedidos)`);
     return { data: data || [], error: null, source: 'supabase' };
   }
 
@@ -235,33 +221,50 @@ class CacheManager {
   
   // Invalidar cache quando configurações mudam
   async invalidateConfigCache(userId) {
-    console.log('🗑️ Invalidando cache de configurações...');
     return await this.cacheService.invalidateUserConfigurations(userId);
   }
 
   // Invalidar cache quando pedidos são adicionados/modificados
   async invalidateOrdersCache(userId) {
-    console.log('🗑️ Invalidando cache de pedidos...');
     return await this.cacheService.invalidateUserOrders(userId);
   }
 
   // Invalidar tudo quando usuário faz logout
   async invalidateAllCache(userId) {
-    console.log('🗑️ Invalidando TODO o cache do usuário...');
     return await this.cacheService.invalidateAllUserCache(userId);
   }
 
   // ===== UTILITÁRIOS =====
   
+  // Buscar TODOS os pedidos sem limitação (para dashboard)
+  async getAllPurchaseOrders(userId) {
+    try {
+      
+      // Buscar direto do Supabase sem limitação
+      const { data, error } = await supabase
+        .from('purchase_orders')
+        .select('*')
+        .eq('user_id', userId)
+        .order('order_date', { ascending: false });
+
+      if (error) throw error;
+
+      return { data: data || [], error: null, source: 'supabase' };
+      
+    } catch (error) {
+      console.error('❌ Erro ao buscar todos os purchase orders:', error);
+      return { data: [], error };
+    }
+  }
+  
   // Função helper para páginas que precisam de "tudo"
   async getAllUserData(userId) {
     try {
-      console.log('🚀 Carregando TODOS os dados do usuário com cache otimizado...');
       
       const [configResult, freightResult, ordersResult] = await Promise.all([
         this.getUserConfigData(userId),
         this.getFreightData(userId),
-        this.getPurchaseOrdersData(userId)
+        this.getAllPurchaseOrders(userId) // Usar função sem limitação
       ]);
 
       const result = {
@@ -291,21 +294,9 @@ class CacheManager {
         }
       };
 
-      console.log('✅ TODOS os dados carregados:', {
-        settings: !!result.settings?.settings,
-        groups: result.groups.length,
-        postos: result.postos.length,
-        suppliers: result.suppliers.length,
-        baseCities: result.baseCities.length,
-        freightRoutes: result.freightRoutes.length,
-        purchaseOrders: result.purchaseOrders.length,
-        sources: result.sources
-      });
-
       return { data: result, error: null };
       
     } catch (error) {
-      console.error('❌ Erro ao carregar todos os dados do usuário:', error);
       return { data: null, error };
     }
   }

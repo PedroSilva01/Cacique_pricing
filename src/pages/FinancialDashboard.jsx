@@ -261,7 +261,6 @@ export default function FinancialDashboard() {
   const loadData = async () => {
     setLoading(true);
     try {
-      console.log('🚀 FinancialDashboard: Carregando dados com cache otimizado...');
       
       // Usar cacheManager para carregar todos os dados otimizados
       const result = await cacheManager.getAllUserData(userId);
@@ -278,15 +277,6 @@ export default function FinancialDashboard() {
       setGroups(data.groups || []);
       setSuppliers(data.suppliers || []);
       setSettings(data.settings || {});
-      
-      // Log das fontes de cache
-      console.log('✅ FinancialDashboard dados carregados:', {
-        orders: data.purchaseOrders?.length || 0,
-        postos: data.postos?.length || 0,
-        groups: data.groups?.length || 0,
-        suppliers: data.suppliers?.length || 0,
-        sources: data.sources
-      });
       
       // Toast informativo sobre cache quando tudo vem do cache
       if (data.sources.orders === 'cache' && data.sources.config === 'cache') {

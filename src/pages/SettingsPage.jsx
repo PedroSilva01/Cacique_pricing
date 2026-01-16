@@ -99,7 +99,6 @@ const SettingsPage = () => {
       if (citiesRes.error) throw citiesRes.error;
       if (suppliersRes.error) {
         console.error('Erro ao carregar fornecedores:', suppliersRes.error);
-        console.log('Dados de fornecedores:', suppliersRes.data);
         throw suppliersRes.error;
       }
       if (postosRes.error) throw postosRes.error;
@@ -170,7 +169,6 @@ const SettingsPage = () => {
         table: 'groups',
         filter: `user_id=eq.${userId}`
       }, (payload) => {
-        console.log('🔄 SettingsPage: groups update:', payload);
         fetchData(); // Recarrega todos os dados para manter consistência
       })
       .subscribe();
@@ -184,7 +182,6 @@ const SettingsPage = () => {
         table: 'postos',
         filter: `user_id=eq.${userId}`
       }, (payload) => {
-        console.log('🔄 SettingsPage: postos update:', payload);
         fetchData();
       })
       .subscribe();
@@ -198,7 +195,6 @@ const SettingsPage = () => {
         table: 'suppliers',
         filter: `user_id=eq.${userId}`
       }, (payload) => {
-        console.log('🔄 SettingsPage: suppliers update:', payload);
         fetchData();
       })
       .subscribe();
@@ -212,7 +208,6 @@ const SettingsPage = () => {
         table: 'base_cities',
         filter: `user_id=eq.${userId}`
       }, (payload) => {
-        console.log('🔄 SettingsPage: base_cities update:', payload);
         fetchData();
       })
       .subscribe();
@@ -226,7 +221,6 @@ const SettingsPage = () => {
         table: 'cities',
         filter: `user_id=eq.${userId}`
       }, (payload) => {
-        console.log('🔄 SettingsPage: cities update:', payload);
         fetchData();
       })
       .subscribe();
@@ -240,7 +234,6 @@ const SettingsPage = () => {
         table: 'freight_routes',
         filter: `user_id=eq.${userId}`
       }, (payload) => {
-        console.log('🔄 SettingsPage: freight_routes update:', payload);
         fetchData();
       })
       .subscribe();
@@ -256,7 +249,6 @@ const SettingsPage = () => {
   }, [userId, fetchData]);
 
   const handleSave = async (tableName, dataToSave) => {
-    console.log('💾 Salvando dados:', { tableName, dataToSave });
     
     if (!userId) return;
     
@@ -451,7 +443,6 @@ const SettingsPage = () => {
           console.error('Erro ao atualizar postos:', updateError);
           toast({ title: 'Erro', description: 'Não foi possível atualizar os postos.', variant: 'destructive' });
         } else {
-          console.log(`${updates.length} postos atualizados com sucesso!`);
           toast({ 
             title: 'Sucesso!', 
             description: `${updates.length} postos foram atualizados e os combustíveis inválidos foram removidos.` 
@@ -512,8 +503,7 @@ const SettingsPage = () => {
         });
 
       if (error) {
-        console.error('Erro ao sincronizar fuelTypes:', error);
-        toast({ title: 'Erro', description: 'Não foi possível sincronizar os tipos de combustível.', variant: 'destructive' });
+                toast({ title: 'Erro', description: 'Não foi possível sincronizar os tipos de combustível.', variant: 'destructive' });
       } else {
         setSettings(prev => ({ ...prev, fuelTypes: mergedFuelTypes }));
         toast({ 
@@ -522,8 +512,7 @@ const SettingsPage = () => {
         });
       }
     } catch (error) {
-      console.error('Erro ao sincronizar fuelTypes:', error);
-      toast({ title: 'Erro', description: 'Ocorreu um erro ao sincronizar os tipos de combustível.', variant: 'destructive' });
+            toast({ title: 'Erro', description: 'Ocorreu um erro ao sincronizar os tipos de combustível.', variant: 'destructive' });
     }
   };
 
@@ -560,9 +549,7 @@ const SettingsPage = () => {
         // INVALIDAR CACHE AUTOMATICAMENTE após salvar configurações
         try {
           await cacheManager.invalidateUserSettings(userId);
-          console.log('Cache de user_settings invalidado automaticamente');
         } catch (cacheError) {
-          console.warn('Erro ao invalidar cache (não crítico):', cacheError);
         }
         
         toast({ 

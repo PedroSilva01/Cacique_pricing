@@ -139,8 +139,7 @@ const PriceEntry = () => {
     try {
       const itemsPerPage = 7; // Limite de itens processados por página
 
-      console.log('🔍 Fetching recent prices with Redis cache...');
-      
+        
       // Tentar buscar do cache Redis primeiro
       const { data: cachedData, error: cacheError, source } = await priceCacheService.getRecentPrices(
         recentPricesFilterDate, 
@@ -149,8 +148,7 @@ const PriceEntry = () => {
       
       let data;
       if (cacheError || !cachedData) {
-        console.log('💿 Fallback to direct Supabase query for recent prices');
-        // Fallback para query direta do Supabase
+                // Fallback para query direta do Supabase
         const result = await supabase
           .from('daily_prices')
           .select(`
@@ -170,7 +168,6 @@ const PriceEntry = () => {
         data = result.data;
       } else {
         data = cachedData;
-        console.log(`🚀 Recent prices loaded from ${source}`);
       }
 
       // Processar TODOS os dados para exibir cada preço por posto individualmente

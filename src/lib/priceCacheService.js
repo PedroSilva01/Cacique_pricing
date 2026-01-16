@@ -70,11 +70,9 @@ export class PriceCacheService {
       performanceMonitor.mark('saveDailyPrices_end');
       const duration = performanceMonitor.measure('saveDailyPrices_start', 'saveDailyPrices_end');
       
-      console.log(`✅ Daily prices saved and cached successfully (${duration?.toFixed(2)}ms)`);
       return { data, error: null };
     } catch (error) {
       this.stats.errors++;
-      console.error('❌ Error saving daily prices:', error);
       return { data: null, error };
     }
   }
@@ -115,7 +113,6 @@ export class PriceCacheService {
       await Promise.all(cachePromises);
       return true;
     } catch (error) {
-      console.error('Redis cache error during daily price caching:', error);
       return false;
     }
   }
@@ -137,17 +134,15 @@ export class PriceCacheService {
         
         if (cachedData) {
           this.stats.hits++;
-          console.log('🚀 Cache HIT for daily prices:', cacheKey);
           const parsedData = typeof cachedData === 'string' ? JSON.parse(cachedData) : cachedData;
           return { data: [parsedData], error: null, source: 'cache' };
         }
       }
 
       this.stats.misses++;
-      console.log('💿 Cache MISS, fetching from Supabase...', { date, userId, groupIds, baseId, supplierId });
-
-      // Build Supabase query
-      let query = supabase
+      
+      // Fetch from Supabase
+      const { data, error } = await supabase
         .from('daily_prices')
         .select(`
           id,
@@ -165,15 +160,6 @@ export class PriceCacheService {
         `)
         .eq('user_id', userId);
 
-      if (date) query = query.eq('date', date);
-      if (baseId) query = query.eq('base_city_id', baseId);
-      if (supplierId) query = query.eq('supplier_id', supplierId);
-      if (groupIds && groupIds.length > 0) {
-        query = query.overlaps('group_ids', groupIds);
-      }
-
-      const { data, error } = await query.order('created_at', { ascending: false });
-
       if (error) throw error;
 
       // Cache the results with adaptive TTL
@@ -184,11 +170,10 @@ export class PriceCacheService {
 
       performanceMonitor.mark('getDailyPrices_end');
       const duration = performanceMonitor.measure('getDailyPrices_start', 'getDailyPrices_end');
-      console.log(`📊 Daily prices query completed (${duration?.toFixed(2)}ms)`);
-
+      
       return { data, error: null, source: 'supabase' };
     } catch (error) {
-      console.error('Error fetching daily prices:', error);
+      this.stats.errors++;
       return { data: null, error };
     }
   }
@@ -200,8 +185,7 @@ export class PriceCacheService {
   // Save station prices with caching
   async saveStationPrices(stationPricesData) {
     try {
-      console.log('💾 Saving station prices with Redis cache...', stationPricesData);
-
+      
       // Delete existing records first
       if (stationPricesData.length > 0) {
         const { user_id, date } = stationPricesData[0];
@@ -232,10 +216,8 @@ export class PriceCacheService {
         }
       }
 
-      console.log('✅ Station prices saved and cached successfully');
       return { data, error: null };
     } catch (error) {
-      console.error('❌ Error saving station prices:', error);
       return { data: null, error };
     }
   }
@@ -249,7 +231,6 @@ export class PriceCacheService {
       await this.cache.set(key, stationPriceRecord, CACHE_TTL.SAVED_PRICES);
       return true;
     } catch (error) {
-      console.error('Redis cache error during station price caching:', error);
       return false;
     }
   }
@@ -424,15 +405,12 @@ export class PriceCacheService {
             uncachedStationIds.push(stationId);
           }
         }
-
-        console.log(`🚀 Cache HIT for ${results.length}/${stationIds.length} station prices`);
       } else {
         uncachedStationIds.push(...stationIds);
       }
 
       // Fetch uncached data from Supabase
       if (uncachedStationIds.length > 0) {
-        console.log('💿 Fetching uncached station prices from Supabase...', uncachedStationIds);
         
         const { data, error } = await supabase
           .from('station_prices')
@@ -454,7 +432,6 @@ export class PriceCacheService {
 
       return { data: results, error: null, source: results.length === stationIds.length ? 'cache' : 'mixed' };
     } catch (error) {
-      console.error('Error fetching station prices:', error);
       return { data: null, error };
     }
   }
@@ -482,16 +459,13 @@ export class PriceCacheService {
           const cached = await this.cache.get(cacheKey);
           if (cached) {
             this.stats.hits++;
-            console.log('🚀 Cache HIT for recent prices:', cacheKey);
-            // Handle both string and object formats from Redis
             const parsedData = typeof cached === 'string' ? JSON.parse(cached) : cached;
             return { data: parsedData, error: null, source: 'cache' };
           }
         }
 
         this.stats.misses++;
-        console.log('💿 Cache MISS, fetching recent prices from Supabase...');
-
+        
         // Fetch from Supabase
         const { data, error } = await supabase
         .from('daily_prices')

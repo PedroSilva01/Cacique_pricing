@@ -18,6 +18,7 @@ import BrandBadge from '@/components/ui/BrandBadge';
 import { DatePicker } from '@/components/ui/date-picker';
 import Pagination from '@/components/ui/pagination';
 
+
 const PurchaseOrders = () => {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -310,8 +311,7 @@ const PurchaseOrders = () => {
   const loadInitialData = async () => {
     setLoading(true);
     try {
-      console.log('🚀 PurchaseOrders: Carregando dados iniciais com cache otimizado...');
-      
+        
       // Usar cacheManager para configurações básicas
       const configResult = await cacheManager.getUserConfigData(userId);
       const freightResult = await cacheManager.getFreightData(userId);
@@ -327,18 +327,7 @@ const PurchaseOrders = () => {
       setSettings(configResult.data.settings || {});
       setFreightRoutes(freightResult.data || []);
       
-      console.log('✅ PurchaseOrders dados iniciais carregados:', {
-        postos: configResult.data.postos?.length || 0,
-        groups: configResult.data.groups?.length || 0,
-        suppliers: configResult.data.suppliers?.length || 0,
-        baseCities: configResult.data.baseCities?.length || 0,
-        freightRoutes: freightResult.data?.length || 0,
-        sources: {
-          config: configResult.data?.source || 'error',
-          freight: freightResult.source || 'error'
-        }
-      });
-      
+            
       // Toast informativo sobre cache
       if (configResult.data?.source === 'cache' && freightResult.source === 'cache') {
         toast({
@@ -352,7 +341,6 @@ const PurchaseOrders = () => {
       const userSettings = configResult.data.settings;
       setFinancialCostRate(userSettings?.financial_cost_rate || 0.00535);
     } catch (err) {
-      console.error('Erro ao carregar dados:', err);
       showErrorToast(toast, { title: 'Erro ao carregar dados', error: err });
     } finally {
       setLoading(false);
@@ -407,7 +395,6 @@ const PurchaseOrders = () => {
     // CORRIGIDO: Posto pode pertencer a múltiplos grupos - buscar em todos
     const postoGroupIds = posto.group_ids || [];
     if (!postoGroupIds.length) {
-      console.log('⚠️ Posto sem grupo:', { stationId, posto: posto.name });
       return null;
     }
 

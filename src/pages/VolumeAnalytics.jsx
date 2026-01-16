@@ -76,7 +76,6 @@ const VolumeAnalytics = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      console.log('🚀 VolumeAnalytics: Carregando dados com cache otimizado...');
       
       // Usar cacheManager para carregar todos os dados otimizados
       const result = await cacheManager.getAllUserData(userId);
@@ -94,14 +93,6 @@ const VolumeAnalytics = () => {
       setSuppliers(data.suppliers || []);
       setSettings(data.settings || {});
       
-      // Log das fontes de cache
-      console.log('✅ VolumeAnalytics dados carregados:', {
-        orders: data.purchaseOrders?.length || 0,
-        groups: data.groups?.length || 0,
-        postos: data.postos?.length || 0,
-        suppliers: data.suppliers?.length || 0,
-        sources: data.sources
-      });
       
       // Toast informativo sobre cache
       if (data.sources.orders === 'cache' && data.sources.config === 'cache') {
@@ -113,7 +104,6 @@ const VolumeAnalytics = () => {
       }
       
     } catch (err) {
-      console.error('Erro ao carregar dados:', err);
       showErrorToast(toast, { title: 'Erro ao carregar dados', error: err });
     } finally {
       setLoading(false);

@@ -123,7 +123,6 @@ const GroupPrices = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      console.log(' GroupPrices: Carregando dados com cache otimizado...');
       
       // Usar cacheManager para carregar configurações básicas
       const configResult = await cacheManager.getUserConfigData(userId);
@@ -140,15 +139,6 @@ const GroupPrices = () => {
       setSuppliers(data.suppliers || []);
       setBaseCities(data.baseCities || []);
       setSettings(data.settings || {});
-      
-      // Log das fontes de cache
-      console.log(' GroupPrices dados carregados:', {
-        groups: data.groups?.length || 0,
-        postos: data.postos?.length || 0,
-        suppliers: data.suppliers?.length || 0,
-        baseCities: data.baseCities?.length || 0,
-        source: data.source
-      });
       
       // Toast informativo sobre cache
       if (data.source === 'cache') {

@@ -167,7 +167,7 @@ const PurchaseOrders = () => {
       printWindow.close();
     }, 500);
 
-    toast({ title: '✅ Exportado com sucesso!' });
+    toast({ title: 'Exportado com sucesso!' });
   };
 
   const formatPaymentDate = (date) => {
@@ -248,6 +248,64 @@ const PurchaseOrders = () => {
     loadInitialData();
   }, [userId]);
 
+  const loadInitialData = async () => {
+    setLoading(true);
+    try {
+      // Usar cacheManager para configurações básicas
+      const configResult = await cacheManager.getUserConfigData(userId);
+      const freightResult = await cacheManager.getFreightData(userId);
+      
+      if (configResult.error) throw configResult.error;
+      if (freightResult.error) throw freightResult.error;
+      
+      // Aplicar configurações aos states
+      setPostos(configResult.data.postos || []);
+      setGroups(configResult.data.groups || []);
+      setSuppliers(configResult.data.suppliers || []);
+      setBaseCities(configResult.data.baseCities || []);
+      setSettings(configResult.data.settings?.settings || {});
+      setFreightRoutes(freightResult.data || []);
+      
+      // FinancialCostRate a partir das configurações
+      const userSettings = configResult.data.settings?.settings || {};
+      setFinancialCostRate(userSettings?.financial_cost_rate || 0.00535);
+    } catch (err) {
+      showErrorToast(toast, { title: 'Erro ao carregar dados', error: err });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadOrders = useCallback(async () => {
+    if (!userId) return;
+    
+    try {
+      // Buscar pedidos do usuário filtrados por data de criação (timestamp) - timezone brasileiro UTC-3
+      const startDateTime = new Date(startDate + 'T00:00:00');
+      const endDateTime = new Date(endDate + 'T23:59:59');
+      
+      const { data, error } = await supabase
+        .from('purchase_orders')
+        .select('*, postos(*, cities(*)), groups(*), suppliers(*), base_cities(*)')
+        .eq('user_id', userId)
+        .gte('created_at', startDateTime.toISOString())
+        .lte('created_at', endDateTime.toISOString());
+
+      if (error) throw error;
+      
+      const filteredOrders = data || [];
+      
+      setOrders(filteredOrders.sort((a, b) => {
+        // Extract numeric part from order ID (assuming format like "order-1", "order-2", etc.)
+        const aNum = parseInt(a.id?.split('-').pop() || a.id || '0');
+        const bNum = parseInt(b.id?.split('-').pop() || b.id || '0');
+        return aNum - bNum;
+      }));
+    } catch (err) {
+      // Erro silencioso ao carregar pedidos
+    }
+  }, [userId, startDate, endDate]);
+
   useEffect(() => {
     if (!userId) return;
     loadOrders();
@@ -293,7 +351,7 @@ const PurchaseOrders = () => {
                     return aNum - bNum;
                   }));
                 } catch (err) {
-                  console.error('Erro ao recarregar pedidos (realtime):', err);
+                  // Erro silencioso ao recarregar pedidos (realtime)
                 }
               };
               reloadData();
@@ -306,75 +364,6 @@ const PurchaseOrders = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [userId, startDate, endDate]);
-
-  const loadInitialData = async () => {
-    setLoading(true);
-    try {
-        
-      // Usar cacheManager para configurações básicas
-      const configResult = await cacheManager.getUserConfigData(userId);
-      const freightResult = await cacheManager.getFreightData(userId);
-      
-      if (configResult.error) throw configResult.error;
-      if (freightResult.error) throw freightResult.error;
-      
-      // Aplicar configurações aos states
-      setPostos(configResult.data.postos || []);
-      setGroups(configResult.data.groups || []);
-      setSuppliers(configResult.data.suppliers || []);
-      setBaseCities(configResult.data.baseCities || []);
-      setSettings(configResult.data.settings || {});
-      setFreightRoutes(freightResult.data || []);
-      
-            
-      // Toast informativo sobre cache
-      if (configResult.data?.source === 'cache' && freightResult.source === 'cache') {
-        toast({
-          title: '⚡ Cache Hit!',
-          description: 'Configurações carregadas instantaneamente do Redis',
-          duration: 2000
-        });
-      }
-
-      // FinancialCostRate a partir das configurações
-      const userSettings = configResult.data.settings;
-      setFinancialCostRate(userSettings?.financial_cost_rate || 0.00535);
-    } catch (err) {
-      showErrorToast(toast, { title: 'Erro ao carregar dados', error: err });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadOrders = useCallback(async () => {
-    if (!userId) return;
-    
-    try {
-      // Buscar pedidos do usuário filtrados por data de criação (timestamp) - timezone brasileiro UTC-3
-      const startDateTime = new Date(startDate + 'T00:00:00');
-      const endDateTime = new Date(endDate + 'T23:59:59');
-      
-      const { data, error } = await supabase
-        .from('purchase_orders')
-        .select('*, postos(*, cities(*)), groups(*), suppliers(*), base_cities(*)')
-        .eq('user_id', userId)
-        .gte('created_at', startDateTime.toISOString())
-        .lte('created_at', endDateTime.toISOString());
-
-      if (error) throw error;
-      
-      const filteredOrders = data || [];
-      
-      setOrders(filteredOrders.sort((a, b) => {
-        // Extract numeric part from order ID (assuming format like "order-1", "order-2", etc.)
-        const aNum = parseInt(a.id?.split('-').pop() || a.id || '0');
-        const bNum = parseInt(b.id?.split('-').pop() || b.id || '0');
-        return aNum - bNum;
-      }));
-    } catch (err) {
-      console.error('Erro ao carregar pedidos:', err);
-    }
   }, [userId, startDate, endDate]);
 
   const getTargetPrice = useCallback((stationId, fuelType, baseId, supplierId = null) => {
@@ -446,7 +435,7 @@ const PurchaseOrders = () => {
         
         setDailyPrices(data || []);
       } catch (err) {
-        console.error('Erro ao buscar preços diários:', err);
+        // Erro silencioso ao buscar preços diários
       }
     };
 
@@ -495,9 +484,12 @@ const PurchaseOrders = () => {
   };
 
   const addProductEntry = () => {
-    if (!settings.fuelTypes || Object.keys(settings.fuelTypes).length === 0) return;
+    if (!settings.fuelTypes || Object.keys(settings.fuelTypes).length === 0) {
+      return;
+    }
     
     const firstFuel = Object.keys(settings.fuelTypes)[0];
+    
     setProductEntries([...productEntries, {
       id: Date.now(),
       fuelType: firstFuel,
@@ -644,13 +636,12 @@ const PurchaseOrders = () => {
         if (error) throw error;
       }
 
-      toast({ title: `✅ ${ordersToSave.length} pedido(s) salvo(s)!` });
+      toast({ title: `${ordersToSave.length} pedido(s) salvo(s)!` });
 
       // Reset form
       setProductEntries([]);
       loadOrders();
     } catch (err) {
-      console.error('Erro ao salvar pedidos:', err);
       showErrorToast(toast, { title: 'Erro ao salvar pedidos', error: err });
     } finally {
       setSaving(false);
@@ -672,11 +663,10 @@ const PurchaseOrders = () => {
 
       if (error) throw error;
 
-      toast({ title: '✅ Pedido excluído com sucesso!', description: 'O pedido foi removido.' });
+      toast({ title: 'Pedido excluído com sucesso!', description: 'O pedido foi removido.' });
       setDeleteConfirmId(null);
       loadOrders();
     } catch (err) {
-      console.error('Erro ao excluir pedido:', err);
       showErrorToast(toast, { title: 'Erro ao excluir', error: err });
     }
   };
@@ -720,9 +710,6 @@ const PurchaseOrders = () => {
       // Usar preço efetivo = unit_price - (daily_financial_cost / volume / 1000)
       const effectivePrice = o.unit_price - (o.volume > 0 ? (o.daily_financial_cost / (o.volume * 1000)) : 0);
       const isIncorrect = Math.abs(effectivePrice - targetPrice) > 0.01;
-      
-      if (isIncorrect) {
-      }
       
       return isIncorrect;
     });
@@ -1252,7 +1239,9 @@ const PurchaseOrders = () => {
             <div className="flex gap-2">
               <Button
                 variant="outline"
-                onClick={addProductEntry}
+                onClick={() => {
+                  addProductEntry();
+                }}
                 className="flex-1 h-12"
                 disabled={!selectedStation}
               >
@@ -1360,7 +1349,7 @@ const PurchaseOrders = () => {
                             <div className="flex gap-1">
                               <Button size="sm" variant="destructive" onClick={() => handleDelete(order.id)} className="h-10 px-4 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 rounded-xl font-semibold">
                                 <Check className="w-4 h-4 mr-1" />
-                                ✅ Confirmar
+                                Confirmar
                               </Button>
                               <Button size="sm" variant="ghost" onClick={() => setDeleteConfirmId(null)} className="h-10 px-4 rounded-xl border-2 border-slate-300 hover:bg-slate-100 font-semibold">
                                 <X className="w-4 h-4" />
@@ -1398,5 +1387,4 @@ const PurchaseOrders = () => {
     </motion.div>
   );
 };
-
 export default PurchaseOrders;
